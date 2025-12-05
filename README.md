@@ -147,8 +147,37 @@ python -c "from config import API_TOKEN, ADMIN_ID; print(f'✅ Config OK - Token
 
 Sử dụng PyInstaller để đóng gói thành 1 file duy nhất, chạy ngầm:
 
+Single-line (cross-shell):
+
 ```bash
 pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V10.py
+```
+
+PowerShell (multi-line — use backtick ` as continuation, no trailing space):
+
+```powershell
+pyinstaller --onefile --noconsole --uac-admin `
+  --icon=icon.ico `
+  --name=SystemCheck `
+  V10.py
+```
+
+CMD (multi-line — use caret ^ as continuation):
+
+```cmd
+pyinstaller --onefile --noconsole --uac-admin ^
+  --icon=icon.ico ^
+  --name=SystemCheck ^
+  V10.py
+```
+
+Unix / Git Bash / WSL (multi-line — use backslash \):
+
+```bash
+pyinstaller --onefile --noconsole --uac-admin \
+  --icon=icon.ico \
+  --name=SystemCheck \
+  V10.py
 ```
 
 *File kết quả sẽ nằm trong thư mục `dist/SystemCheck.exe`.*

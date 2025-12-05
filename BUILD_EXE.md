@@ -106,9 +106,9 @@ pyinstaller --onefile --noconsole --uac-admin V10.py
 ### **Option 3: With Custom Name & Icon**
 
 ```powershell
-pyinstaller --onefile --noconsole --uac-admin ^
-    --icon=icon.ico ^
-    --name=SystemCheck ^
+pyinstaller --onefile --noconsole --uac-admin `
+    --icon=icon.ico `
+    --name=SystemCheck `
     V10.py
 ```
 
@@ -123,12 +123,32 @@ pyinstaller --onefile --noconsole --uac-admin ^
 Tốt nhất cho deployment:
 
 ```powershell
+pyinstaller --onefile --noconsole --uac-admin `
+    --icon=icon.ico `
+    --name=SystemCheck `
+    --distpath=.\release `
+    --specpath=.\build `
+    --workpath=.\build\temp `
+    V10.py
+```
+
+```cmd
 pyinstaller --onefile --noconsole --uac-admin ^
     --icon=icon.ico ^
     --name=SystemCheck ^
     --distpath=.\release ^
     --specpath=.\build ^
-    --buildpath=.\build\temp ^
+    --workpath=.\build\temp ^
+    V10.py
+```
+
+```bash
+pyinstaller --onefile --noconsole --uac-admin \
+    --icon=icon.ico \
+    --name=SystemCheck \
+    --distpath=./release \
+    --specpath=./build \
+    --workpath=./build/temp \
     V10.py
 ```
 
@@ -141,6 +161,25 @@ pyinstaller --onefile --noconsole --uac-admin ^
 ```powershell
 Copy-Item .env .\release\.env
 ```
+
+**Helper scripts (recommended)**
+
+To avoid common path/icon issues when using `--specpath`/`--workpath`, use the included helper scripts. They create required folders, copy `icon.ico` into the build folder and run PyInstaller with safe paths.
+
+- PowerShell (run in project root):
+    ```powershell
+    .\build.ps1
+    ```
+
+- CMD (run in project root):
+    ```cmd
+    build.cmd
+    ```
+
+- Bash / Git Bash / WSL:
+    ```bash
+    ./build.sh
+    ```
 
 ---
 
@@ -183,13 +222,38 @@ Test trên Telegram: gửi `/start` hoặc `/menu 1`
 ### **Bước 3: Build EXE**
 
 ```powershell
-# Production build
+# Production build (PowerShell)
+# Note: use backtick ` as line continuation and NO trailing space after it.
+pyinstaller --onefile --noconsole --uac-admin `
+    --icon=icon.ico `
+    --name=SystemCheck `
+    --distpath=.\release `
+    --specpath=.\build `
+    --workpath=.\build\temp `
+    V10.py
+```
+
+```cmd
+:: Production build (CMD.exe)
+:: Use caret ^ as line continuation for CMD
 pyinstaller --onefile --noconsole --uac-admin ^
     --icon=icon.ico ^
     --name=SystemCheck ^
     --distpath=.\release ^
     --specpath=.\build ^
-    --buildpath=.\build\temp ^
+    --workpath=.\build\temp ^
+    V10.py
+```
+
+```bash
+# Production build (Unix / Git Bash / WSL)
+# Use backslash \ as line continuation
+pyinstaller --onefile --noconsole --uac-admin \
+    --icon=icon.ico \
+    --name=SystemCheck \
+    --distpath=./release \
+    --specpath=./build \
+    --workpath=./build/temp \
     V10.py
 ```
 
@@ -241,12 +305,12 @@ Compress-Archive -Path .\release -DestinationPath SystemMonitor_V10.zip
 
 **Cách sửa:**
 ```powershell
-pyinstaller --onefile --noconsole --uac-admin ^
-    --hidden-import=config ^
-    --hidden-import=utils ^
-    --hidden-import=grabber ^
-    --hidden-import=media ^
-    --hidden-import=monitor ^
+pyinstaller --onefile --noconsole --uac-admin `
+    --hidden-import=config `
+    --hidden-import=utils `
+    --hidden-import=grabber `
+    --hidden-import=media `
+    --hidden-import=monitor `
     V10.py
 ```
 
@@ -305,6 +369,34 @@ Get-Content .\release\bot.log
 cd .\release
 python -c "from config import API_TOKEN, ADMIN_ID; print(f'Token: {API_TOKEN[:10]}...'); print(f'Admin: {ADMIN_ID}')"
 ```
+
+```
+
+### **Problem 6: File icon.ico không tìm thấy / FileNotFoundError: Icon input file ... not found**
+
+**Nguyên nhân:** Khi bạn dùng `--specpath` / `--workpath`, PyInstaller có thể cố gắng truy xuất icon theo đường dẫn tương đối so với thư mục làm việc (workpath). Nếu icon được chỉ bằng tên tương đối (ví dụ `--icon=icon.ico`), PyInstaller có thể tìm ở `./build/icon.ico` (workpath) — dẫn tới lỗi nếu icon thực tế nằm ở thư mục gốc dự án.
+
+**Giải pháp (chọn 1):**
+
+- **A. Dùng đường dẫn tuyệt đối cho icon (an toàn):**
+
+```powershell
+# PowerShell - tìm đường dẫn tuyệt đối trước, rồi truyền vào pyinstaller
+$icon = (Resolve-Path .\icon.ico).Path
+pyinstaller --onefile --noconsole --uac-admin --icon="$icon" --name=SystemCheck --distpath=.\release --specpath=.\build --workpath=.\build\temp V10.py
+```
+
+- **B. Copy icon vào work/spec folder trước khi build:**
+
+```powershell
+# Copy icon into the spec/work directory so relative path works
+Copy-Item .\icon.ico .\build\icon.ico -Force
+pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name=SystemCheck --distpath=.\release --specpath=.\build --workpath=.\build\temp V10.py
+```
+
+- **C. (Alternative) Don't set `--specpath`/`--workpath` if you don't need them** — then `--icon=icon.ico` will be resolved from current directory as expected.
+
+**Lưu ý:** luôn kiểm tra file `./build/SystemCheck.spec` nếu bạn chỉnh lại icon; PyInstaller ghi icon reference vào spec file và sẽ tìm theo đường dẫn trong spec.
 
 ---
 
@@ -432,9 +524,9 @@ python verify_setup.py
 python V10.py
 
 # 3. Build (production)
-pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico ^
-    --name=SystemCheck --distpath=.\release --specpath=.\build ^
-    --buildpath=.\build\temp V10.py
+pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico `
+    --name=SystemCheck --distpath=.\release --specpath=.\build `
+    --workpath=.\build\temp V10.py
 
 # 4. Copy config
 Copy-Item .env .\release\.env

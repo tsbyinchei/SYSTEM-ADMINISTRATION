@@ -7,7 +7,8 @@
 
 ### **1️⃣ Cài Đặt Thư Viện Mới**
 
-```powershell
+```bash
+# Install dependencies (works in CMD, PowerShell, Git Bash)
 pip install python-dotenv
 pip install -r requirements.txt
 ```
@@ -24,13 +25,15 @@ ADMIN_ID=YOUR_ADMIN_ID_HERE
 
 ### **3️⃣ Kiểm Tra Config**
 
-```powershell
+```bash
+# Works in CMD, PowerShell, Git Bash
 python -c "from config import API_TOKEN, ADMIN_ID; print('✅ Config OK')"
 ```
 
 ### **4️⃣ Chạy Bot**
 
-```powershell
+```bash
+# Run locally (CMD / PowerShell / Git Bash)
 python V10.py
 ```
 
@@ -85,11 +88,29 @@ pip install -r requirements.txt --force-reinstall
 ```
 
 **❌ KeyError: 'API_TOKEN'**
+
+PowerShell:
 ```powershell
-# Check .env tồn tại
+# Check .env exists
 Test-Path .env
-# Check format đúng
+# Show contents
 Get-Content .env
+```
+
+CMD:
+```cmd
+:: Check .env exists
+if exist .env (echo .env exists) else (echo .env missing)
+:: Show contents
+type .env
+```
+
+Unix / Git Bash:
+```bash
+# Check .env exists
+[ -f .env ] && echo ".env exists" || echo ".env missing"
+# Show contents
+cat .env
 ```
 
 **❌ Bot không connect**
@@ -106,7 +127,32 @@ python -c "from config import API_TOKEN; print(API_TOKEN[:20] + '...')"
 2. ✅ Chạy V10.py
 3. ✅ Test lệnh `/menu` trên Telegram
 4. 📝 Xem `BUILD_EXE.md` cho hướng dẫn build
-5. 🔨 Build EXE: `pyinstaller --onefile --noconsole V10.py`
+5. 🔨 Build EXE: single-line (cross-shell)
+
+```bash
+pyinstaller --onefile --noconsole V10.py
+```
+
+PowerShell multi-line:
+
+```powershell
+pyinstaller --onefile --noconsole `
+	V10.py
+```
+
+CMD multi-line:
+
+```cmd
+pyinstaller --onefile --noconsole ^
+	V10.py
+```
+
+Unix / Git Bash multi-line:
+
+```bash
+pyinstaller --onefile --noconsole \
+	V10.py
+```
 
 ---
 

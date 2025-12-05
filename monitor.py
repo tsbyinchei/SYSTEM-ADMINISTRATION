@@ -29,7 +29,7 @@ class SystemMonitor:
         
         self.stop_event = Event()
         self.cap = None
-        self.last_alerts = {}  # Track last alert time for debounce
+        self.last_alerts = {}  
         
         # Import utilities
         from utils import get_active_window_title, find_and_close_window
@@ -79,35 +79,46 @@ class SystemMonitor:
         """Kill blocked applications"""
         if not block_mode_active:
             return
-        
         try:
-            from config import BLOCKED_DATA
-            
-            blocked_apps = [a.lower() for a in BLOCKED_DATA.get("apps", [])]
-            
+            # Load blocked data at runtime from BLOCKED_FILE to avoid
+            # importing a variable that may not exist in config when frozen.
+            from config import BLOCKED_FILE
+            from utils import load_blocked_list
+
+            blocked_data = load_blocked_list(BLOCKED_FILE)
+            blocked_apps = [a.lower() for a in blocked_data.get("apps", [])]
+
             for proc in psutil.process_iter(['name']):
                 try:
-                    p_name = proc.info['name'].lower()
-                    
+                    pname = proc.info.get('name')
+                    if not pname:
+                        continue
+                    p_name = pname.lower()
+
                     # Always block TaskMgr if blocking is active
                     if p_name == "taskmgr.exe":
-                        proc.terminate()
+                        try:
+                            proc.terminate()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
                         logger.info("Terminated: taskmgr.exe")
                         continue
-                    
+
                     if p_name in blocked_apps:
-                        proc.terminate()
+                        try:
+                            proc.terminate()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
                         logger.info(f"Terminated blocked app: {p_name}")
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass
-            
+
             # Close control panel windows
             if "control.exe" in blocked_apps:
                 self.find_and_close_window(["control panel", "bảng điều khiển"])
-            
+
             if "systemsettings.exe" in blocked_apps:
                 self.find_and_close_window(["settings", "cài đặt"])
-        
         except Exception as e:
             logger.error(f"Block apps check failed: {e}", exc_info=True)
     

@@ -7,22 +7,31 @@ Developer: TsByin
 
 import os
 import logging
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env file
-env_path = Path(__file__).parent / '.env'
+# Determine base directory (works when frozen)
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Load .env file from base dir (important for frozen EXE)
+env_path = Path(BASE_DIR) / '.env'
 load_dotenv(dotenv_path=env_path)
 
 # ==============================================================================
 # LOGGING CONFIGURATION
 # ==============================================================================
 
+LOG_FILE = os.path.join(BASE_DIR, os.getenv('LOG_FILE', 'bot.log'))
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(os.getenv('LOG_FILE', 'bot.log')),
+        logging.FileHandler(LOG_FILE),
         logging.StreamHandler()
     ]
 )
@@ -60,14 +69,9 @@ MOTION_DETECT_COOLDOWN = int(os.getenv('MOTION_DETECT_COOLDOWN', 5))
 # FILE PATHS
 # ==============================================================================
 
-if getattr(__import__('sys'), 'frozen', False):
-    BASE_DIR = os.path.dirname(__import__('sys').executable)
-else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 BLOCKED_FILE = os.path.join(BASE_DIR, os.getenv('BLOCKED_FILE', 'blocked.json'))
 SETTINGS_FILE = os.path.join(BASE_DIR, os.getenv('SETTINGS_FILE', 'settings.json'))
-LOG_FILE = os.path.join(BASE_DIR, os.getenv('LOG_FILE', 'bot.log'))
+
 
 # ==============================================================================
 # PERFORMANCE SETTINGS
