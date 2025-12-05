@@ -45,7 +45,7 @@ required_files = [
     "grabber.py",
     "media.py",
     "monitor.py",
-    "V10_refactored.py",
+    "V10.py",
     "requirements.txt"
 ]
 
@@ -176,7 +176,7 @@ print(f"  • Token: {'***' + str(API_TOKEN)[-10:]}")
 print(f"  • Modules: 7 loaded")
 
 print("\n🚀 READY TO RUN:")
-print("  → python V10_refactored.py")
+print("  → python V10.py")
 
 print("\n📊 CHECK LOGS:")
 print("  → Get-Content bot.log -Tail 20 -Wait")

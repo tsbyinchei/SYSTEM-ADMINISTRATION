@@ -31,7 +31,7 @@ python -c "from config import API_TOKEN, ADMIN_ID; print('✅ Config OK')"
 ### **4️⃣ Chạy Bot**
 
 ```powershell
-python V10_refactored.py
+python V10.py
 ```
 
 Nếu thành công, bạn sẽ thấy:
@@ -70,7 +70,7 @@ V10/
 ├── grabber.py (NEW - optimized)
 ├── media.py (NEW)
 ├── monitor.py (NEW)
-├── V10_refactored.py (NEW - main bot)
+├── V10.py (Main bot - 867 lines)
 ├── requirements.txt (UPDATED)
 └── OPTIMIZATION_GUIDE.md (NEW)
 ```
@@ -103,10 +103,10 @@ python -c "from config import API_TOKEN; print(API_TOKEN[:20] + '...')"
 ## **NEXT STEPS**
 
 1. ✅ Cài .env + modules
-2. ✅ Chạy V10_refactored.py
+2. ✅ Chạy V10.py
 3. ✅ Test lệnh `/menu` trên Telegram
-4. 📝 Xem `OPTIMIZATION_GUIDE.md` cho config nâng cao
-5. 🔨 Build EXE: `pyinstaller --onefile --noconsole V10_refactored.py`
+4. 📝 Xem `BUILD_EXE.md` cho hướng dẫn build
+5. 🔨 Build EXE: `pyinstaller --onefile --noconsole V10.py`
 
 ---
 
