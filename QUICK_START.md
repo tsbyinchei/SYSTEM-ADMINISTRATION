@@ -127,33 +127,10 @@ python -c "from config import API_TOKEN; print(API_TOKEN[:20] + '...')"
 2. ✅ Chạy V10.py
 3. ✅ Test lệnh `/menu` trên Telegram
 4. 📝 Xem `BUILD_EXE.md` cho hướng dẫn build
-5. 🔨 Build EXE: single-line (cross-shell)
+5. 🔨 Build EXE:
 
 ```bash
-pyinstaller --onefile --noconsole V10.py
-```
-
-PowerShell multi-line:
-
-```powershell
-pyinstaller --onefile --noconsole `
-	V10.py
-```
-
-CMD multi-line:
-
-```cmd
-pyinstaller --onefile --noconsole ^
-	V10.py
-```
-
-Unix / Git Bash multi-line:
-
-```bash
-pyinstaller --onefile --noconsole \
-	V10.py
-```
-
----
+pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V10.py
+```---
 
 **🎉 XONG! Bot tối ưu đã sẵn sàng!**

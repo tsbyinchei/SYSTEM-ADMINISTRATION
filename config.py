@@ -42,16 +42,22 @@ logger = logging.getLogger(__name__)
 # TELEGRAM BOT SETTINGS
 # ==============================================================================
 
-API_TOKEN = os.getenv('API_TOKEN')
-ADMIN_ID = int(os.getenv('ADMIN_ID', 0))
+API_TOKEN = os.getenv('API_TOKEN', '').strip()
+ADMIN_ID_STR = os.getenv('ADMIN_ID', '').strip()
 
 if not API_TOKEN:
-    logger.error("❌ API_TOKEN not found in .env file")
-    raise ValueError("API_TOKEN is required")
+    logger.error("❌ API_TOKEN not found or empty in .env file")
+    raise ValueError("API_TOKEN is required in .env file")
 
-if not ADMIN_ID:
-    logger.error("❌ ADMIN_ID not found in .env file")
-    raise ValueError("ADMIN_ID is required")
+if not ADMIN_ID_STR:
+    logger.error("❌ ADMIN_ID not found or empty in .env file")
+    raise ValueError("ADMIN_ID is required in .env file")
+
+try:
+    ADMIN_ID = int(ADMIN_ID_STR)
+except ValueError:
+    logger.error(f"❌ ADMIN_ID must be a number, got: '{ADMIN_ID_STR}'")
+    raise ValueError(f"Invalid ADMIN_ID: '{ADMIN_ID_STR}' (must be a number)")
 
 logger.info(f"✅ Bot configured for Admin ID: {ADMIN_ID}")
 
@@ -59,11 +65,21 @@ logger.info(f"✅ Bot configured for Admin ID: {ADMIN_ID}")
 # SYSTEM MONITOR SETTINGS
 # ==============================================================================
 
-MONITOR_INTERVAL = int(os.getenv('MONITOR_INTERVAL', 1))
-CPU_ALERT_THRESHOLD = int(os.getenv('CPU_ALERT_THRESHOLD', 95))
-CPU_ALERT_COOLDOWN = int(os.getenv('CPU_ALERT_COOLDOWN', 300))
-MOTION_DETECT_AREA = int(os.getenv('MOTION_DETECT_AREA', 3000))
-MOTION_DETECT_COOLDOWN = int(os.getenv('MOTION_DETECT_COOLDOWN', 5))
+def safe_int_env(key, default):
+    """Safely convert environment variable to int"""
+    try:
+        val = os.getenv(key, '').strip()
+        return int(val) if val else default
+    except (ValueError, TypeError):
+        logger.warning(f"Invalid {key}='{val}', using default: {default}")
+        return default
+
+MONITOR_INTERVAL = safe_int_env('MONITOR_INTERVAL', 1)
+CPU_ALERT_THRESHOLD = safe_int_env('CPU_ALERT_THRESHOLD', 95)
+CPU_ALERT_COOLDOWN = safe_int_env('CPU_ALERT_COOLDOWN', 300)
+MOTION_DETECT_AREA = safe_int_env('MOTION_DETECT_AREA', 3000)
+MOTION_DETECT_COOLDOWN = safe_int_env('MOTION_DETECT_COOLDOWN', 5)
+MAX_WORKERS = safe_int_env('MAX_WORKERS', 4)
 
 # ==============================================================================
 # FILE PATHS
@@ -77,7 +93,7 @@ SETTINGS_FILE = os.path.join(BASE_DIR, os.getenv('SETTINGS_FILE', 'settings.json
 # PERFORMANCE SETTINGS
 # ==============================================================================
 
-MAX_WORKERS = int(os.getenv('MAX_WORKERS', 4))
+# MAX_WORKERS moved to safe_int_env above
 DATABASE_TIMEOUT = int(os.getenv('DATABASE_TIMEOUT', 10))
 GRAB_PASSWORD_COMPRESS = os.getenv('GRAB_PASSWORD_COMPRESS', 'true').lower() == 'true'
 

