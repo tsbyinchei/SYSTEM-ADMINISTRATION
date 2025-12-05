@@ -3,6 +3,7 @@ System Monitor Module
 Optimized monitoring with debounce and resource management
 
 Developer: TsByin
+Version: 10.0
 """
 
 import os

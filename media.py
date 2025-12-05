@@ -3,6 +3,7 @@ Media Capture Module
 Screenshot, Webcam, Audio, Video recording
 
 Developer: TsByin
+Version: 10.0
 """
 
 import os

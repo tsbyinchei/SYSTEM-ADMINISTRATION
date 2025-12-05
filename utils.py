@@ -3,6 +3,7 @@ Utility Functions Module
 Common helper functions
 
 Developer: TsByin
+Version: 10.0
 """
 
 import os

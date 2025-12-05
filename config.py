@@ -3,6 +3,7 @@ Configuration Module
 Load settings từ .env và constants
 
 Developer: TsByin
+Version: 10.0
 """
 
 import os

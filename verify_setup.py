@@ -4,6 +4,7 @@ SETUP VERIFICATION SCRIPT
 Kiểm tra xem setup có đúng không
 
 Developer: TsByin
+Version: 10.0
 """
 
 import os

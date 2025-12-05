@@ -1,53 +1,94 @@
-# 🚀 QUICK START - PHIÊN BẢN TỐI ƯU V10
+# 🚀 QUICK START - V10
 
 > **Developer:** TsByin  
-> **Version:** 2.0 (Quick Start Guide)
+> **Version:** 10.0
 
-## **5 BƯỚC NHANH**
+---
 
-### **1️⃣ Cài Đặt Thư Viện Mới**
+## 5 Bước Nhanh
+
+### 1️⃣ Cài Đặt Thư Viện
 
 ```bash
-# Install dependencies (works in CMD, PowerShell, Git Bash)
-pip install python-dotenv
 pip install -r requirements.txt
 ```
 
-### **2️⃣ Cấu Hình .env**
+### 2️⃣ Cấu Hình .env
 
-```bash
-# Mở file .env và sửa:
+Tạo file `.env` với nội dung:
+
+```env
 API_TOKEN=YOUR_TELEGRAM_TOKEN_HERE
 ADMIN_ID=YOUR_ADMIN_ID_HERE
 ```
 
-**Lưu lại file.**
+**Lưu file.**
 
-### **3️⃣ Kiểm Tra Config**
+### 3️⃣ Kiểm Tra Config
 
 ```bash
-# Works in CMD, PowerShell, Git Bash
 python -c "from config import API_TOKEN, ADMIN_ID; print('✅ Config OK')"
 ```
 
-### **4️⃣ Chạy Bot**
+### 4️⃣ Chạy Bot
 
 ```bash
-# Run locally (CMD / PowerShell / Git Bash)
 python V10.py
 ```
 
-Nếu thành công, bạn sẽ thấy:
+**Thành công sẽ thấy:**
 ```
-✅ Bot initialized for Admin: YOUR_ID
-✅ Bot Started. ID: YOUR_ID
-🟢 SYSTEM ONLINE
-🟢 System monitor started
+🟢 Bot Started. ID: YOUR_ID
+🟢 SYSTEM ONLINE | Host: [tên máy]
 ```
 
-### **5️⃣ Test Telegram**
+### 5️⃣ Test Telegram
 
-Gửi `/menu 1` hoặc `/start` từ Telegram → Bot sẽ gửi menu
+Gửi `/start` hoặc `/menu` → Bot sẽ hiển thị menu
+
+---
+
+## Lệnh Cơ Bản
+
+| Lệnh | Mô Tả |
+|------|-------|
+| `/start` | Mở menu điều khiển |
+| `/help` | Xem hướng dẫn |
+| `/cmd <lệnh>` | Chạy lệnh CMD |
+| `/msg <nội dung>` | Hiển thị thông báo |
+| `/say <nội dung>` | Phát giọng nói |
+
+---
+
+## Build EXE (Tùy Chọn)
+
+```bash
+pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V10.py
+```
+
+Output: `dist/SystemCheck.exe`
+
+**Xem:** `BUILD_EXE.md` để chi tiết
+
+---
+
+## Troubleshooting
+
+**Bot không online?**
+- Kiểm tra .env có API_TOKEN hợp lệ
+- Chạy lại: `python V10.py`
+
+**Import error?**
+- Reinstall: `pip install -r requirements.txt`
+
+**Không nhận lệnh?**
+- Kiểm tra ADMIN_ID đúng với ID Telegram
+- Gửi `/start` lại
+
+---
+
+**Tài liệu đầy đủ:** `README.md`  
+**Kiến trúc chi tiết:** `ARCHITECTURE.md`
 
 ---
 

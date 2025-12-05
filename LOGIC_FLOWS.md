@@ -1,7 +1,7 @@
 # 🔄 DETAILED LOGIC FLOWS - STEP BY STEP
 
 > **Developer:** TsByin  
-> **Version:** 2.0 (Detailed Flow Documentation)
+> **Version:** 10.0 (Detailed Flow Documentation)
 
 ## **I. STARTUP SEQUENCE (Chi tiết)**
 
@@ -114,11 +114,11 @@ STEP 5: Handlers are registered (during import)
 ## **II. MESSAGE HANDLING FLOW (User sends command)**
 
 ```
-SCENARIO: User sends "/menu 1"
+SCENARIO: User sends "/start" or "/menu"
 
 ┌─────────────────────────────────┐
 │ User in Telegram client         │
-│ Types: "/menu 1"                │
+│ Types: "/start" or "/menu"      │
 │ Presses: Send button            │
 └────────────┬────────────────────┘
              │
@@ -135,7 +135,7 @@ SCENARIO: User sends "/menu 1"
 │ Message object (m):              │
 │  ├─ m.from_user.id = 6314201835 │
 │  ├─ m.chat.id = 6314201835       │
-│  ├─ m.text = "/menu 1"           │
+│  ├─ m.text = "/start" or "/menu" │
 │  └─ m.date = timestamp           │
 └────────────┬────────────────────┘
              │
@@ -162,17 +162,15 @@ SCENARIO: User sends "/menu 1"
 │ (Check passes: 6314201835 ==    │
 │  ADMIN_ID ✓)                    │
 │                                  │
-│ args = m.text.split()            │
-│ # args = ['/menu', '1']         │
+│ args = m.text.split()
+│ # args = ['/start'] or ['/menu'] │
 └────────────┬────────────────────┘
              │
              ▼
     
 ┌─────────────────────────────────┐
-│ if len(args) > 1:               │
-│     if args[1] == '1':          │
-│         save_settings(SETTINGS_FILE, 1)
-│         send_reply_menu(m)      │
+│ Always send text-based menu:    │
+│     send_reply_menu(m)          │
 └────────────┬────────────────────┘
              │
              ▼
@@ -202,7 +200,7 @@ SCENARIO: User sends "/menu 1"
 ┌─────────────────────────────────┐
 │ bot.send_message(               │
 │     m.chat.id,                   │
-│     "🛡️ **MENU 1 (Bàn Phím)**",│
+│     "🛡️ **Menu (Text Keyboard)**",│
 │     reply_markup=mk,             │
 │     parse_mode="Markdown"        │
 │ )                               │
@@ -522,7 +520,7 @@ BLOCKED_DATA
 
 CURRENT_SETTINGS
 ├─ Initial: Loaded from settings.json
-├─ Change by: /menu 1 or /menu 2
+├─ Change by: /start or /menu
 ├─ Effect:
 │  └─ Determines which menu to show
 └─ Persistence: Auto-saved to disk
