@@ -10,5 +10,5 @@ pycryptodomex==3.18.0
 pyaudio==0.2.13
 pyttsx3==2.90
 pyinstaller==6.1.0
-python-dotenv==1.0.0
 pyperclip==1.8.2
+python-dotenv==1.0.0
