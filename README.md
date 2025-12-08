@@ -14,7 +14,7 @@ Công cụ quản lý và giám sát máy tính từ xa qua Telegram Bot. Phiên
 ## 📁 CẤU TRÚC DỰ ÁN 
 
 ```
-V10/
+V11/
 ├── Core Modules (7 files)
 │   ├── V11.py          - Main bot (entry, version V11) ⭐
 │   ├── config.py       - Configuration & logging

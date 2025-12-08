@@ -287,7 +287,7 @@ def expand_domains(domain):
 def add_firewall_block(domain, fqdns, resolve_domains, ip_limit=64, block_ports=True):
     """Add outbound firewall rule to block domain and subdomains"""
     try:
-        rule_name = f"V10_Block_{domain}"
+        rule_name = f"V11_Block_{domain}"
         fqdn_list = ",".join([f"'{fq}'" for fq in fqdns])
         if fqdn_list:
             cmd = [
@@ -322,7 +322,7 @@ def add_firewall_block(domain, fqdns, resolve_domains, ip_limit=64, block_ports=
 def remove_firewall_block(domain):
     """Remove firewall rule for domain"""
     try:
-        rule_name = f"V10_Block_{domain}"
+        rule_name = f"V11_Block_{domain}"
         cmd = [
             "powershell",
             "-Command",
@@ -372,7 +372,7 @@ def refresh_firewall_blocks(domains, ip_limit=64, block_ports=True):
         for d in domains:
             bundle = expand_domains(d)
             # Remove old IP rule and add anew
-            ip_rule = f"V10_Block_{d}_IP"
+            ip_rule = f"V11_Block_{d}_IP"
             subprocess.run(
                 [
                     "powershell",

@@ -111,7 +111,7 @@ Output: `dist/SystemCheck.exe`
 ## **STRUCTURE MỚI**
 
 ```
-V10/
+V11/
 ├── .env (NEW)
 ├── config.py (NEW)
 ├── utils.py (NEW)

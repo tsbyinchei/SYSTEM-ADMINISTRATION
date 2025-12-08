@@ -1,5 +1,5 @@
 """
-V10 - System Monitor Bot 
+V11 - System Monitor Bot 
 
 Main entry point with modular architecture
 
@@ -90,7 +90,7 @@ def send_reply_menu(m):
     mk.add("📍 Vị Trí IP", "🧱 Khóa Input")
     mk.add("💓 Kiểm Tra Bot")
     
-    bot.send_message(m.chat.id, "🛡️ **CONTROL PANEL V10**", reply_markup=mk, parse_mode="Markdown")
+    bot.send_message(m.chat.id, "🛡️ **CONTROL PANEL V11**", reply_markup=mk, parse_mode="Markdown")
 
 
 
@@ -954,6 +954,6 @@ if __name__ == "__main__":
 
 # ═══════════════════════════════════════════════════════════════
 # Developer: TsByin
-# Project: V10 System Monitor Bot - Refactored & Optimized
+# Project: V11 System Monitor Bot - Refactored & Optimized
 # Version: 10.0 (Modular Architecture with Concurrent Operations)
 # ═══════════════════════════════════════════════════════════════

@@ -102,7 +102,7 @@ dir dist\SystemCheck.exe
 - Reinstall PyInstaller: `pip install --upgrade pyinstaller`
 
 **"Module not found"?**
-- Verify: `python -c "import V10"`
+- Verify: `python -c "import V11"`
 - Reinstall deps: `pip install -r requirements.txt`
 
 **EXE won't run?**
