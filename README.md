@@ -471,6 +471,6 @@ Khi kích hoạt:
 -----
 
 **Developer:** TsByin  
-**Version:** 10.0 (Text-based interface - simplified, stable)  
+**Version:** 11.0 (Text-based interface - simplified, stable)  
 **Last Updated:** December 2025  
 **License:** Personal Use Only
