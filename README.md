@@ -1,6 +1,6 @@
 -----
 
-# 🛡️ MONITOR V11 - PARENTAL CONTROL TOOL - PERSONAL SYSTEM ADMINISTRATION
+# 🛡️ MONITOR V11 - PARENTAL CONTROL TOOL - PERSONAL SYSTEM ADMINISTRATION 🛡️
 
 > **Developer:** TsByin  
 > **Version:** 11.0 (Hardened & Optimized)
