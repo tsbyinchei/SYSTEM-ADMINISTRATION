@@ -3,7 +3,7 @@ Configuration Module
 Load settings từ .env và constants
 
 Developer: TsByin
-Version: 11.0
+Version: 12.0
 """
 
 import os
@@ -120,7 +120,8 @@ BROWSER_PATHS = {
 # GLOBAL STATE
 # ==============================================================================
 
-START_TIME = None
+from datetime import datetime
+START_TIME = datetime.now()  # B6 fixed: assign at module load time
 AUDIO_AVAILABLE = False
 TTS_AVAILABLE = False
 

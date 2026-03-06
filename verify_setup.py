@@ -4,7 +4,7 @@ SETUP VERIFICATION SCRIPT
 Kiểm tra xem setup có đúng không
 
 Developer: TsByin
-Version: 11.0
+Version: 12.0
 """
 
 import os
@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 print("=" * 70)
-print("🔍 V11 SETUP VERIFICATION")
+print("🔍 V12 SETUP VERIFICATION")
 print("=" * 70)
 
 # Check 1: Python version
@@ -46,7 +46,7 @@ required_files = [
     "grabber.py",
     "media.py",
     "monitor.py",
-    "V11.py",
+    "V12.py",
     "requirements.txt"
 ]
 
@@ -174,10 +174,10 @@ print(f"  • Python: {sys.version.split()[0]}")
 print(f"  • Admin ID: {ADMIN_ID}")
 print(f"  • Browsers: {len(browsers)} found")
 print(f"  • Token: {'***' + str(API_TOKEN)[-10:]}")
-print(f"  • Modules: 7 loaded")
+print(f"  • Modules: 9 loaded")
 
 print("\n🚀 READY TO RUN:")
-print("  → python V11.py")
+print("  → python V12.py")
 
 print("\n📊 CHECK LOGS:")
 print("  → Get-Content bot.log -Tail 20 -Wait")

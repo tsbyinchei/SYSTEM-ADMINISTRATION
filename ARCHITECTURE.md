@@ -1,26 +1,25 @@
-# 📊 ARCHITECTURE & LOGIC FLOW - V11 HARDENED
+# 📊 ARCHITECTURE & LOGIC FLOW - V12
 
 > **Developer:** TsByin  
-> **Version:** 11.0 (Hardened & Optimized)
+> **Version:** 12.0 (Hardened, Full-Featured & Optimized)
 
 ## **I. FILE & MODULE STRUCTURE**
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     V11.py (Main Entry)                     │
-│                        (Version V11)                        │
+│                     V12.py (Main Entry)                     │
+│                  (Version 12.0, ~1350+ lines)               │
 │  Xử lý tất cả handlers & callbacks từ Telegram Bot          │
-└──────────────┬──────────────────────────────────────────────┘
+└──────────────┬────────────────────────────────────────────────┘
                │
-       ┌───────┼───────┬───────────┬──────────┬────────┐
-       │       │       │           │          │        │
-       ▼       ▼       ▼           ▼          ▼        ▼
-   config   utils  grabber      media     monitor   .env
-   Setup  Helpers Password   Screenshot  Monitor  Config
-   Logging        History    Webcam      Stats   Tokens
-            Protect WiFi    Audio      Thread  Settings
-            Files          Video      Motion
-                                      Alert
+       ┌───────┼───────┬───────────┬──────────┬─────────┬────────┬────────┐
+       │       │       │           │          │        │        │
+       ▼       ▼       ▼           ▼          ▼        ▼        ▼
+   config   utils  grabber      media     monitor  keylogger  watchdog
+   Setup  Helpers Password   Screenshot  Monitor  Keystroke  Auto-
+   Logging Audit  History    Webcam      Stats    ParentCtrl restart
+   .env    Persist WiFi      Audio/MP4  Clipboard
+   Tokens  Settings         Stream     Monitor
 ```
 
 ---
@@ -31,7 +30,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ python V11.py                                           │
+│ python V12.py                                           │
 └────────────────┬────────────────────────────────────────┘
                  │
                  ▼
@@ -51,12 +50,12 @@
 │    ├─ Setup logging → bot.log                           │
 │    ├─ Validate tokens                                   │
 │    ├─ Load browser paths, settings                      │
-│    └─ Return constants to V11.py                        │
+│    └─ Return constants to V12.py                        │
 └────────────────┬────────────────────────────────────────┘
                  │
                  ▼
 ┌─────────────────────────────────────────────────────────┐
-│ 3. V11.py INITIALIZES GLOBALS                           │
+│ 3. V12.py INITIALIZES GLOBALS                           │
 │    ├─ bot = TeleBot(API_TOKEN)                          │
 │    ├─ bot_stats = BotStats()                            │
 │    ├─ BLOCKED_DATA = load_blocked_list()                │
@@ -207,11 +206,16 @@
         │           └─ Nếu CPU > threshold:
         │              Send alert (với debounce 5 min)
         │
-        └─ Check 5: _check_intrusion_alert()
-                    └─ Nếu intrusion_alert_active:
-                       ├─ Capture 2 frames từ webcam
-                       ├─ Detect motion (absdiff)
-                       └─ Send photo nếu motion > threshold
+        ├─ Check 5: _check_intrusion_alert()
+        │           └─ Nếu intrusion_alert_active:
+        │              ├─ Capture 2 frames từ webcam
+        │              ├─ Detect motion (absdiff)
+        │              └─ Send photo nếu motion > threshold
+        │
+        └─ Check 6: _check_clipboard_monitor()  (mỗi 3 tick)
+                    └─ Nếu clipboard_monitor_active:
+                       ├─ Poll clipboard text
+                       └─ Send alert nếu nội dung thay đổi
                │
         time.sleep(1)  ← Chờ 1 giây rồi lặp lại
 ```
@@ -342,7 +346,7 @@ settings.json (Menu state)
            │
            ▼
 ┌─────────────────────────────────────┐
-│ V11.py uses API_TOKEN               │
+│ V12.py uses API_TOKEN               │
 │ Never exposed in code               │
 └─────────────────────────────────────┘
 ```
@@ -414,7 +418,7 @@ monitor.py
    ├─ Track commands
    └─ Track data size
 
-V11.py (Main)
+V12.py (Main)
 ├─ Telegram handlers
 ├─ Command routing
 ├─ State management

@@ -1,11 +1,11 @@
 -----
 
-# 🛡️ MONITOR V11 - PARENTAL CONTROL TOOL - PERSONAL SYSTEM ADMINISTRATION
+# 🛡️ MONITOR V12 - PARENTAL CONTROL TOOL - PERSONAL SYSTEM ADMINISTRATION
 
 > **Developer:** TsByin  
-> **Version:** 11.0 (Hardened & Optimized)
+> **Version:** 12.0 (Hardened, Full-Featured & Optimized)
 
-Công cụ quản lý và giám sát máy tính từ xa qua Telegram Bot. Phiên bản V11 bổ sung lớp chặn web/app cứng hơn (hosts + firewall + refresh IP), chặn nhiều mục trong một lệnh, nâng chất lượng media và thêm xác nhận an toàn cho thao tác tắt/khởi động.
+Công cụ quản lý và giám sát máy tính từ xa qua Telegram Bot. V12 bổ sung: sửa 13 lỗi bảo mật, file explorer phân trang, ghi video MP4 tùy chỉnh, watchdog tự khởi động lại, keylogger quản lý con cái có window-aware, lưu trạng thái qua restart, audit log, dashboard /status, /disk, /ps filter, /net, /events, clipboard monitor, remote desktop lite (/stream), hot-reload /reload.
 
 > **⚠️ LƯU Ý PHÁP LÝ:** Công cụ này được thiết kế cho mục đích **Quản lý con cái** hoặc **Quản trị hệ thống cá nhân**. Việc sử dụng công cụ này để theo dõi máy tính của người khác mà không có sự đồng ý là vi phạm pháp luật. Tác giả không chịu trách nhiệm về bất kỳ hành vi sử dụng sai mục đích nào.
 
@@ -14,38 +14,49 @@ Công cụ quản lý và giám sát máy tính từ xa qua Telegram Bot. Phiên
 ## 📁 CẤU TRÚC DỰ ÁN 
 
 ```
-V11/
-├── Core Modules (7 files)
-│   ├── V11.py          - Main bot (entry, version V11) ⭐
-│   ├── config.py       - Configuration & logging
-│   ├── utils.py        - System utilities
-│   ├── grabber.py      - Password/history extraction (concurrent)
-│   ├── media.py        - Screen/webcam/audio capture
-│   ├── monitor.py      - Background monitoring daemon
-│   └── verify_setup.py - Setup verification
+V12/
+├── Core Modules (9 files)
+│   ├── V12.py          - Main bot entry (~1350+ dòng) ⭐
+│   ├── config.py       - Cấu hình & logging
+│   ├── utils.py        - Tiện ích hệ thống, audit log, settings
+│   ├── grabber.py      - Trích xuất password/history (concurrent)
+│   ├── media.py        - Screen/webcam/audio capture, MP4
+│   ├── monitor.py      - Background daemon + BotStats + ClipMonitor
+│   ├── watchdog.py     - Tự khởi động lại khi crash (NEW)
+│   ├── keylogger.py    - Keylogger window-aware (NEW)
+│   └── verify_setup.py - Kiểm tra cài đặt
 │
 ├── Configuration
-│   ├── .env            - Tokens & settings (REQUIRED)
-│   └── requirements.txt - Dependencies
+│   ├── .env            - Token & cài đặt (REQUIRED)
+│   ├── requirements.txt - Dependencies
+│   ├── settings.json   - State persist tự tạo (block/taskmgr/alert/clipboard)
+│   ├── blocked.json    - Danh sách chặn tự tạo
+│   └── audit.log       - Audit trail tự tạo
 │
 └── Build & Docs
-    ├── dist/           - Compiled EXE folder
-    ├── README.md       - This file
-    ├── ARCHITECTURE.md - System architecture
-    ├── LOGIC_FLOWS.md  - Detailed flow diagrams
-    ├── QUICK_START.md  - Quick setup guide
-    └── BUILD_EXE.md    - EXE build instructions
+    ├── dist/           - Folder EXE đã biên dịch
+    ├── README.md       - File này
+    ├── ARCHITECTURE.md - Kiến trúc hệ thống
+    ├── LOGIC_FLOWS.md  - Sơ đồ luồng chi tiết
+    ├── QUICK_START.md  - Hướng dẫn nhanh
+    └── BUILD_EXE.md    - Hướng dẫn build EXE
 ```
 
-**V11 Architecture (Hardened & Optimized):**
-- ✅ Modular design (7 independent modules + 1 main entry point)
-- ✅ .env-based secure configuration (no hardcoded secrets)
-- ✅ Concurrent password extraction (ThreadPoolExecutor - 2-3x faster)
-- ✅ Multi-file password/history output (all profiles from all browsers)
-- ✅ Background monitoring daemon with CPU/motion alerts
-- ✅ Text-based ReplyKeyboard interface (simple, intuitive)
-- ✅ File browser with inline navigation callbacks
-- ✅ Comprehensive logging to bot.log
+**V12 Architecture (Hardened & Full-Featured):**
+- ✅ Modular design (9 modules + 1 main entry point)
+- ✅ .env-based secure configuration (không hardcode secrets)
+- ✅ Concurrent password extraction (ThreadPoolExecutor — 2-3x faster)
+- ✅ Multi-file password/history output (tất cả profiles tất cả browsers)
+- ✅ Background monitor daemon (CPU/motion alerts, clipboard monitor)
+- ✅ Watchdog process tự khởi động lại khi crash (Task Scheduler)
+- ✅ Keylogger window-aware và tự gửi qua Telegram mỗi 5 phút
+- ✅ State persistence — lưu/khôi phục trạng thái sau restart
+- ✅ Audit log mọi lệnh được thực thi
+- ✅ Remote desktop lite (/stream)
+- ✅ Hot-reload cấu hình (/reload)
+- ✅ Text-based ReplyKeyboard + 21 slash commands tự đăng ký
+- ✅ File browser phân trang, per-item buttons (xem/tải/xóa/upload)
+- ✅ Logging đầy đủ ra bot.log
 
 -----
 
@@ -55,10 +66,12 @@ V11/
 
   * **Webcam Capture:** Chụp ảnh từ camera trước.
   * **Screenshot:** Chụp màn hình, gửi PNG chất lượng gốc (không nén Telegram).
-  * **Screen Record:** Quay màn hình 10 giây (đúng 10s bằng frame count 20 FPS).
-  * **Audio Record:** Ghi âm môi trường 10 giây.
-  * **Process Manager:** Xem process, Force Kill.
-  * **System Info:** CPU, RAM, Disk, Network, IP.
+  * **Screen Record:** Quay màn hình N giây xuất MP4 (`/record [N]`, mặc định 10s, 20 FPS).
+  * **Audio Record:** Ghi âm môi trường N giây (`/audio [N]`, mặc định 10s).
+  * **Remote Desktop Lite:** Stream màn hình mỗi N giây qua Telegram (`/stream [N]`, `/stream stop`).
+  * **Process Manager:** Xem/lọc process, Force Kill (`/ps [filter]`, `/kill <pid>`).
+  * **System Info:** CPU, RAM, Disk, Battery, Network, IP.
+  * **System Dashboard:** Overview nhanh qua `/status`; chi tiết đĩa/pin qua `/disk`; mạng qua `/net`; Windows Event Log qua `/events`.
 
 ### 2️⃣ 🚫 Access Control
 
@@ -100,9 +113,10 @@ V11/
 
 ### 5️⃣ 💬 Remote Command Execution
 
-  * **Shell Commands:** Chạy CMD command và lấy output (VD: `ipconfig`, `tasklist`).
-  * **Text-to-Speech:** Phát giọng nói qua loa máy (TTS).
-  * **Message Box:** Hiển thị thông báo nổi lên trên màn hình.
+  * **Shell Commands:** Chạy lệnh shell whitelist và lấy output (`/cmd <lệnh>`, `/cmdlist` để xem danh sách).
+  * **Text-to-Speech:** Phát giọng nói qua loa máy (`/say [--rate N] [--voice f|m] <text>`).
+  * **Message Box:** Hiển thị thông báo popup trên màn hình (`/msg <nội dung>`).
+  * **Hot-Reload:** Tải lại cấu hình `.env` ngay lập tức mà không cần restart bot (`/reload`).
 
 ### 6️⃣ 🛡️ Cơ Chế Tự Vệ & Ẩn Danh (Anti-Detection)
 
@@ -111,6 +125,21 @@ V11/
   * **Folder Protection:** Chống xóa bằng NTFS Access Denied.
   * **Auto-Reconnect:** Tự động kết nối lại nếu bị disconnect.
   * **Stealth Mode:** Chạy ngầm không có console (--noconsole).
+
+### 7️⃣ 🔑 Keylogger Management
+
+  * **Window-Aware Keylogger:** Ghi phím kết hợp với tên cửa sổ đang active.
+  * **Auto-Send:** Tự động gửi keylog qua Telegram mỗi 5 phút.
+  * **Toggle:** Bật/tắt keylogger từ menu mà không cần restart.
+  * **Safe Fallback:** Nếu `pynput` không cài, keylogger tự tắt — không crash bot.
+
+### 8️⃣ 📊 System Dashboard & Audit (V12 NEW)
+
+  * **State Persistence:** Trạng thái block/taskmgr/alert/clipboard tự lưu vào `settings.json` → khôi phục sau restart.
+  * **Audit Log:** Mọi lệnh thực thi được ghi vào `audit.log` kèm timestamp (xem qua `/auditlog [N]`).
+  * **Bot Commands Auto-Register:** 22 lệnh slash tự đăng ký vào Telegram khi bot khởi động.
+  * **Hot-Reload Config:** Chỉnh `.env` rồi gửi `/reload` → bot cập nhật ngay không cần restart.
+  * **Clipboard Monitor:** Tự động theo dõi clipboard và gửi cảnh báo khi có nội dung mới (`/clipmon`).
 
 -----
 
@@ -145,7 +174,7 @@ Cấu hình được quản lý thông qua file `.env` (an toàn hơn):
 
 ### Bước 1: Tạo file `.env`
 
-Tạo file `.env` trong thư mục gốc (cùng với V11.py):
+Tạo file `.env` trong thư mục gốc (cùng với V12.py):
 
 ```bash
 API_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
@@ -166,7 +195,13 @@ MOTION_DETECT_AREA=3000
 Chạy lệnh kiểm tra:
 
 ```bash
-python -c "from config import API_TOKEN, ADMIN_ID; print(f'✅ Config OK - Token: {API_TOKEN[:10]}..., Admin: {ADMIN_ID}')"
+python verify_setup.py
+```
+
+Hoặc kiểm tra nhanh:
+
+```bash
+python -c "from config import API_TOKEN, ADMIN_ID; print(f'✅ Config OK — Token: {API_TOKEN[:10]}..., Admin: {ADMIN_ID}')"
 ```
 
 -----
@@ -182,7 +217,7 @@ python -c "from config import API_TOKEN, ADMIN_ID; print(f'✅ Config OK - Token
 Sử dụng PyInstaller để đóng gói thành 1 file duy nhất, chạy ngầm:
 
 ```bash
-pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V11.py
+pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V12.py
 ```*File kết quả sẽ nằm trong thư mục `dist/SystemCheck.exe`.*
 
 **Lưu ý:** File `.env` phải ở cùng thư mục với `SystemCheck.exe`
@@ -228,20 +263,33 @@ Khi gõ `/start` hoặc `/menu`, bot sẽ hiển thị menu với các nút như
 
 **Chỉ cần bấm các nút để thực hiện lệnh - không cần gõ text phức tạp.**
 
-### Các lệnh Chat (Text Input):
+### Các lệnh Slash (V12 — 22 commands):
 
-| Lệnh | Mô tả | Ví dụ |
-| :--- | :--- | :--- |
-| `/start` hoặc `/menu` | Mở Menu điều khiển chính | `/start` |
-| `/help` | Xem hướng dẫn chi tiết | `/help` |
-| `/block app <tên.exe> ...` | Thêm nhiều app vào danh sách chặn | `/block app chrome.exe msiexec.exe` |
-| `/block site <domain> ...` | Thêm nhiều website vào danh sách chặn | `/block site facebook.com youtube.com` |
-| `/unblock app <tên.exe> ...` | Xóa nhiều app khỏi danh sách chặn | `/unblock app chrome.exe` |
-| `/unblock site <domain> ...` | Xóa nhiều website khỏi danh sách chặn | `/unblock site facebook.com youtube.com` |
-| `/msg <nội dung>` | Hiển thị thông báo trên màn hình | `/msg Chào cậu!` |
-| `/say <nội dung>` | Phát giọng nói qua loa | `/say Hello` |
-| `/cmd <lệnh>` | Chạy lệnh CMD/PowerShell | `/cmd ipconfig` |
-| `/list` | Liệt kê app/web bị chặn | `/list` |
+| Lệnh | Mô tả |
+| :--- | :--- |
+| `/start` hoặc `/menu` | Mở Menu điều khiển chính |
+| `/help` | Xem hướng dẫn chi tiết |
+| `/status` | Dashboard hệ thống (CPU/RAM/Disk/Battery/Net) |
+| `/stats` | Thống kê bot (uptime, số lệnh đã chạy) |
+| `/disk` | Chi tiết ổ đĩa & trạng thái pin |
+| `/ps [filter]` | Danh sách tiến trình (tùy chọn lọc theo tên) |
+| `/net` | Snapshot mạng (interfaces, IO, TCP connections) |
+| `/events` | 10 Windows System Event Log mới nhất |
+| `/stream [N]` | Phát màn hình mỗi N giây (default 5s) |
+| `/stream stop` | Dừng stream màn hình |
+| `/record [N]` | Quay màn hình N giây, xuất MP4 |
+| `/audio [N]` | Ghi âm N giây (default 10s) |
+| `/cmd <lệnh>` | Chạy lệnh shell (whitelist) |
+| `/cmdlist` | Xem danh sách lệnh shell được phép |
+| `/msg <nội dung>` | Hiển thị thông báo popup trên màn hình |
+| `/say [--rate N] [--voice f\|m] <text>` | TTS phát giọng nói qua loa |
+| `/block app\|site <tên…>` | Chặn nhiều app/website |
+| `/unblock app\|site <tên…>` | Gỡ chặn app/website |
+| `/kill <pid>` | Kết thúc tiến trình theo PID |
+| `/clipmon` | Toggle tự động giám sát clipboard |
+| `/reload` | Hot-reload cấu hình từ `.env` không cần restart |
+| `/auditlog [N]` | Xem N dòng audit log gần nhất (default 20) |
+| `/list` | Liệt kê app/web đang bị chặn |
 
 ### Công Dụng Từng Nút Menu:
 
@@ -361,7 +409,7 @@ Khi kích hoạt:
 **Cách sửa:**
 - Kiểm tra file `.env` có tồn tại trong cùng folder với `SystemCheck.exe`.
 - Đảm bảo `.env` có dòng: `API_TOKEN=YOUR_TOKEN_HERE` (không có space).
-- Nếu chạy source code: `.env` phải ở cùng folder với `V11.py`.
+- Nếu chạy source code: `.env` phải ở cùng folder với `V12.py`.
 - Chạy test: `python -c "from config import API_TOKEN; print(API_TOKEN[:10])"`
 
 **3. Không chặn được Website?**
@@ -413,7 +461,7 @@ Khi kích hoạt:
 
 **Cách sửa:**
 - Đảm bảo browser đã lưu password/history (vào browser -> Settings -> Passwords).
-- Chạy trực tiếp từ source: `python V11.py` để xem lỗi chi tiết.
+- Chạy trực tiếp từ source: `python V12.py` để xem lỗi chi tiết.
 - Kiểm tra log: `bot.log` trong folder chạy.
 
 **9. Bot bị tắt đột ngột?**
@@ -460,9 +508,13 @@ Khi kích hoạt:
 
 ## 🔧 TECHNICAL SPECS
 
-- **Modular Design:** 7 modules + 1 main entry point.
-- **Concurrency:** ThreadPoolExecutor cho password extraction.
-- **Password Extraction:** Decryption Chrome/Edge/Firefox profiles.
+- **Modular Design:** 9 modules + 1 main entry point (`V12.py`).
+- **Concurrency:** ThreadPoolExecutor cho password extraction (2-3x faster).
+- **Password Extraction:** Decryption Chrome/Edge/Firefox/Cốc Cốc — tất cả profiles.
+- **Watchdog Process:** Task Scheduler tự khởi động lại bot khi crash.
+- **Keylogger:** Window-aware (pynput), tự gửi Telegram mỗi 5 phút.
+- **State Persistence:** `settings.json` lưu block/taskmgr/alert/clipboard qua restart.
+- **Audit Log:** Mọi lệnh ghi vào `audit.log` với timestamp.
 - **Anti-Debug:** Folder protection + NTFS permission lock.
 - **Persistence:** Registry HKCU\Software\Microsoft\Windows\CurrentVersion\Run.
 - **Stealth:** --noconsole, auto-hide folder, background monitoring.
@@ -471,6 +523,6 @@ Khi kích hoạt:
 -----
 
 **Developer:** TsByin  
-**Version:** 11.0 (Text-based interface - simplified, stable)  
-**Last Updated:** December 2025  
+**Version:** 12.0 (Hardened, Full-Featured & Optimized)  
+**Last Updated:** March 2026  
 **License:** Personal Use Only

