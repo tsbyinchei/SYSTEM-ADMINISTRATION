@@ -1493,6 +1493,33 @@ def h_volume(m):
             subprocess.run(["powershell", "-NoProfile", "-Command", ps],
                            creationflags=subprocess.CREATE_NO_WINDOW, timeout=10, check=False)
 
+        def _ps_set_volume(level_pct):
+            """Set exact volume % via PowerShell Windows Audio native COM — no pycaw needed"""
+            import subprocess
+            ps = (
+                "Add-Type -TypeDefinition @'"
+                "using System.Runtime.InteropServices;"
+                "[Guid(\"5CDF2C82-841E-4546-9722-0CF74078229A\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]"
+                "interface IAudioEndpointVolume { int f(); int g(); int h(); int i();"
+                "  int SetMasterVolumeLevelScalar(float f, System.Guid g); int j();"
+                "  int GetMasterVolumeLevelScalar(out float f); int SetMute(int b, System.Guid g); }"
+                "[Guid(\"BCDE0395-E52F-467C-8E3D-C4579291692E\")]"
+                "class MMDeviceEnumerator {} "
+                "public class Audio {"
+                "  public static void SetVolume(double v) {"
+                "    var t = Type.GetTypeFromCLSID(new System.Guid(\"BCDE0395-E52F-467C-8E3D-C4579291692E\"));"
+                "    var e = (dynamic)Activator.CreateInstance(t);"
+                "    var d = e.GetDefaultAudioEndpoint(0,1);"
+                "    var vol = (IAudioEndpointVolume)d.Activate(typeof(IAudioEndpointVolume).GUID,23,null);"
+                "    vol.SetMasterVolumeLevelScalar((float)(v/100.0), System.Guid.Empty);"
+                "    vol.SetMute(0, System.Guid.Empty); } }"
+                "'@ -Language CSharp -ErrorAction SilentlyContinue; "
+                f"[Audio]::SetVolume({level_pct})"
+            )
+            result = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                                    capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=15)
+            return result.returncode == 0
+
         if arg in ("status", ""):
             if USE_PYCAW:
                 cur = round(volume.GetMasterVolumeLevelScalar() * 100)
@@ -1550,17 +1577,15 @@ def h_volume(m):
                     volume.SetMasterVolumeLevelScalar(level / 100.0, None)
                     volume.SetMute(0, None)
                 else:
-                    # Use nircmd if available, else SendKeys workaround
-                    import shutil
-                    if shutil.which("nircmd"):
-                        import subprocess
-                        subprocess.run(["nircmd", "setsysvolume", str(int(level * 655.35))],
-                                       creationflags=subprocess.CREATE_NO_WINDOW, timeout=5, check=False)
-                    else:
-                        bot.reply_to(m,
-                            f"⚠️ pycaw chưa cài, không thể đặt âm lượng chính xác.\n"
-                            f"Cài: `pip install pycaw comtypes`", parse_mode="Markdown")
-                        return
+                    # Fallback: PowerShell native Windows Audio COM (no pycaw needed)
+                    if not _ps_set_volume(level):
+                        # Last resort: SendKeys up/down estimation
+                        _wsh_keys(173)        # mute
+                        _wsh_keys(173)        # unmute
+                        _wsh_keys(174, 50)    # volume down to 0
+                        steps = round(level / 2)  # each press ~2%
+                        if steps > 0:
+                            _wsh_keys(175, steps)
                 bot.reply_to(m, f"🔊 Âm lượng đã đặt: **{level}%**", parse_mode="Markdown")
             except ValueError:
                 bot.reply_to(m, "❌ Giá trị không hợp lệ. Dùng: /volume [0-100|up|down|max|mute|unmute|status]")

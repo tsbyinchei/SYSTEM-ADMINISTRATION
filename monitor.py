@@ -8,6 +8,7 @@ Version: 12.0
 
 import os
 import time
+import ctypes
 import logging
 import psutil
 import cv2
@@ -15,6 +16,58 @@ from threading import Event, Thread
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# Windows Settings UWP class names — only these are the real Settings app
+_WINDOWS_SETTINGS_CLASSES = frozenset([
+    "ApplicationFrameWindow",  # Windows 10/11 UWP shell
+])
+_WINDOWS_SETTINGS_TITLES = frozenset([
+    "settings", "cài đặt", "paramètres", "einstellungen", "configuración",
+])
+_BROWSER_EXE = frozenset([
+    "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe",
+    "vivaldi.exe", "iexplore.exe", "chromium.exe",
+])
+
+def _close_windows_settings_uwp():
+    """Close ONLY the real Windows Settings UWP window (ApplicationFrameWindow),
+    NOT browser settings/preferences pages which also have 'settings' in their title."""
+    try:
+        GetClassName = ctypes.windll.user32.GetClassNameW
+        GetWindowText = ctypes.windll.user32.GetWindowTextW
+        GetWindowTextLength = ctypes.windll.user32.GetWindowTextLengthW
+        IsWindowVisible = ctypes.windll.user32.IsWindowVisible
+        PostMessage = ctypes.windll.user32.PostMessageW
+        WM_CLOSE = 0x0010
+
+        def _enum_cb(hwnd, _):
+            if not IsWindowVisible(hwnd):
+                return True
+            # Check window class name
+            cls_buf = ctypes.create_unicode_buffer(256)
+            GetClassName(hwnd, cls_buf, 256)
+            cls = cls_buf.value
+
+            if cls not in _WINDOWS_SETTINGS_CLASSES:
+                return True  # Not a UWP ApplicationFrameWindow — skip
+
+            # Confirm title contains a settings keyword
+            length = GetWindowTextLength(hwnd)
+            if length == 0:
+                return True
+            title_buf = ctypes.create_unicode_buffer(length + 1)
+            GetWindowText(hwnd, title_buf, length + 1)
+            title = title_buf.value.lower()
+
+            if any(kw in title for kw in _WINDOWS_SETTINGS_TITLES):
+                PostMessage(hwnd, WM_CLOSE, 0, 0)
+                logger.info(f"Closed Windows Settings UWP: '{title_buf.value}'")
+            return True
+
+        CMPFUNC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+        ctypes.windll.user32.EnumWindows(CMPFUNC(_enum_cb), 0)
+    except Exception as e:
+        logger.error(f"_close_windows_settings_uwp failed: {e}")
 
 # ==============================================================================
 # SYSTEM MONITOR CLASS
@@ -164,7 +217,9 @@ class SystemMonitor:
                 self.find_and_close_window(["control panel", "bảng điều khiển"])
 
             if "systemsettings.exe" in blocked_apps:
-                self.find_and_close_window(["settings", "cài đặt"])
+                # Use class name 'ApplicationFrameWindow' to target only the real
+                # Windows Settings UWP app — NOT browser settings pages
+                _close_windows_settings_uwp()
         except Exception as e:
             logger.error(f"Block apps check failed: {e}", exc_info=True)
     
