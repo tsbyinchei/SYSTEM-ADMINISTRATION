@@ -436,10 +436,11 @@ Khi kích hoạt:
   ```
   /cmd icacls "%APPDATA%\Microsoft\Windows\SystemMonitor" /reset /T
   ```
-- Sau đó tắt bot:
+- Sau đó tắt bot hoàn toàn (kể cả watchdog) bằng lệnh:
   ```
-  /cmd taskkill /f /im SystemCheck.exe
+  /stop
   ```
+  > ⚠️ **Không dùng** `/cmd taskkill` — lệnh đó bị chặn bởi whitelist. Dùng `/stop` để tắt bot đúng cách.
 - Bây giờ có thể xóa folder.
 
 **6. Webcam / Audio không hoạt động?**

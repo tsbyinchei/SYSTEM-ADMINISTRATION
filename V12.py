@@ -174,9 +174,11 @@ def help_handler(m):
         "/unblock app|site <tên>\n"
         "/kill <pid>\n"
         "/cmd <lệnh shell>\n"
+        "/volume [0-100|up|down|max|mute|unmute|status]\n"
         "/cmdlist — Lệnh shell hợp lệ\n"
         "/clipmon — Toggle clipboard monitor\n"
         "/reload — Tải lại .env\n"
+        "/stop — Tắt bot + watchdog (không restart)\n"
         "/auditlog [N] — Xem N dòng audit log\n"
         "/help — Trợ giúp"
     )
@@ -208,8 +210,10 @@ def _setup_bot_commands():
             BotCommand("unblock",  "Gỡ chặn app/web"),
             BotCommand("kill",     "Kết thúc tiến trình"),
             BotCommand("cmd",      "Chạy lệnh shell"),
+            BotCommand("volume",   "Âm lượng hệ thống [0-100|up|down|max|mute]"),
             BotCommand("cmdlist",  "Danh sách lệnh shell hợp lệ"),
             BotCommand("reload",   "Tải lại config .env"),
+            BotCommand("stop",     "Tắt bot và watchdog hoàn toàn"),
             BotCommand("auditlog", "Xem audit log [N dòng]"),
             BotCommand("help",     "Trợ giúp"),
         ]
@@ -557,6 +561,17 @@ def toggle_block(m):
         if monitor:
             monitor.update_flags(block_mode=block_mode_active)
         _save_state()
+
+        # Sync firewall/hosts with new toggle state
+        sites = BLOCKED_DATA.get("sites", [])
+        if sites:
+            if block_mode_active:
+                for s in sites:
+                    block_site(s)
+            else:
+                for s in sites:
+                    unblock_site(s)
+
         status = "🟢 BẬT" if block_mode_active else "🔴 TẮT"
         bot.send_message(m.chat.id, f"🛡️ Chế độ Chặn: {status}")
         bot_stats.increment_command()
@@ -969,6 +984,22 @@ def send_power_confirmation(chat_id, action):
     )
     bot.send_message(chat_id, f"⚠️ Xác nhận {label}?", reply_markup=mk)
 
+@bot.message_handler(commands=['stop'])
+def h_stop(m):
+    """/stop — Tắt bot và watchdog hoàn toàn (không tự restart lại)"""
+    if m.from_user.id != ADMIN_ID:
+        return
+    mk = types.InlineKeyboardMarkup()
+    mk.add(
+        types.InlineKeyboardButton("✅ Tắt bot", callback_data="stop|confirm"),
+        types.InlineKeyboardButton("❌ Hủy", callback_data="stop|cancel")
+    )
+    bot.reply_to(m,
+        "⚠️ Tắt bot và watchdog?\n"
+        "Bot sẽ **không tự khởi động lại**.",
+        reply_markup=mk, parse_mode="Markdown")
+
+
 @bot.message_handler(func=lambda m: m.text == "🔄 Khởi động lại")
 def h_res(m):
     """Reboot system"""
@@ -1143,6 +1174,10 @@ def h_loc(m):
     try:
         # B3 fixed: use HTTPS
         r = requests.get("https://ip-api.com/json/", timeout=5).json()
+        if r.get('status') == 'fail':
+            msg_err = r.get('message', 'unknown error')
+            bot.send_message(m.chat.id, f"❌ IP API lỗi: {msg_err}\nℹ️ Lý do thường gặp: IP private / rate limit (45 req/phút).")
+            return
         lat = r.get('lat', '')
         lon = r.get('lon', '')
         maps_link = f"https://maps.google.com/?q={lat},{lon}" if lat and lon else "N/A"
@@ -1383,7 +1418,8 @@ def block_mgr(m):
             for t in targets:
                 if t not in BLOCKED_DATA[key]:
                     BLOCKED_DATA[key].append(t)
-                    if type_ == "site" and not block_site(t):
+                    # Only apply firewall/hosts immediately if block mode is active
+                    if type_ == "site" and block_mode_active and not block_site(t):
                         failed.append(t)
                         continue
                     added.append(t)
@@ -1394,6 +1430,7 @@ def block_mgr(m):
             for t in targets:
                 if t in BLOCKED_DATA[key]:
                     BLOCKED_DATA[key].remove(t)
+                    # Always remove firewall/hosts when explicitly unblocking
                     if type_ == "site" and not unblock_site(t):
                         failed.append(t)
                         continue
@@ -1423,6 +1460,116 @@ def block_mgr(m):
     except Exception as e:
         logger.error(f"block_mgr failed: {e}")
         bot.reply_to(m, f"❌ Lỗi: {e}")
+
+@bot.message_handler(commands=['volume'])
+def h_volume(m):
+    """/volume [0-100|up|down|max|mute] — Điều chỉnh âm lượng hệ thống"""
+    if m.from_user.id != ADMIN_ID:
+        return
+    try:
+        import ctypes
+        from ctypes import POINTER, cast
+        # pythoncom-free volume control via Windows IAudioEndpointVolume
+        try:
+            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+            from comtypes import CLSCTX_ALL
+            devices = AudioUtilities.GetSpeakers()
+            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            volume = cast(interface, POINTER(IAudioEndpointVolume))
+            USE_PYCAW = True
+        except Exception:
+            USE_PYCAW = False
+
+        parts = m.text.split(maxsplit=1)
+        arg = parts[1].strip().lower() if len(parts) > 1 else "status"
+
+        def _wsh_keys(key_code, times=1):
+            """Simulate media key presses via WScript.Shell COM object"""
+            import subprocess
+            ps = (
+                f"$wsh = New-Object -ComObject WScript.Shell; "
+                f"1..{times} | ForEach-Object {{ $wsh.SendKeys([char]{key_code}) }}"
+            )
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                           creationflags=subprocess.CREATE_NO_WINDOW, timeout=10, check=False)
+
+        if arg in ("status", ""):
+            if USE_PYCAW:
+                cur = round(volume.GetMasterVolumeLevelScalar() * 100)
+                muted = volume.GetMute()
+                bot.reply_to(m, f"🔊 Âm lượng hiện tại: **{cur}%**{'  🔇 (đang mute)' if muted else ''}",
+                             parse_mode="Markdown")
+            else:
+                bot.reply_to(m, "ℹ️ Cú pháp: /volume [0-100|up|down|max|mute|unmute|status]")
+            return
+
+        if arg == "mute":
+            if USE_PYCAW:
+                volume.SetMute(1, None)
+            else:
+                _wsh_keys(173)  # VK_VOLUME_MUTE
+            bot.reply_to(m, "🔇 Đã tắt tiếng.")
+        elif arg == "unmute":
+            if USE_PYCAW:
+                volume.SetMute(0, None)
+            else:
+                _wsh_keys(173)  # toggle mute again
+            bot.reply_to(m, "🔊 Đã bật tiếng.")
+        elif arg == "max":
+            if USE_PYCAW:
+                volume.SetMasterVolumeLevelScalar(1.0, None)
+                volume.SetMute(0, None)
+            else:
+                _wsh_keys(175, 50)  # VK_VOLUME_UP x50
+            bot.reply_to(m, "🔊 Âm lượng tối đa (100%).")
+        elif arg == "up":
+            if USE_PYCAW:
+                cur = volume.GetMasterVolumeLevelScalar()
+                volume.SetMasterVolumeLevelScalar(min(1.0, cur + 0.1), None)
+                volume.SetMute(0, None)
+                new_val = round(volume.GetMasterVolumeLevelScalar() * 100)
+            else:
+                _wsh_keys(175, 5)
+                new_val = "?"
+            bot.reply_to(m, f"🔊 Tăng âm lượng → {new_val}%")
+        elif arg == "down":
+            if USE_PYCAW:
+                cur = volume.GetMasterVolumeLevelScalar()
+                volume.SetMasterVolumeLevelScalar(max(0.0, cur - 0.1), None)
+                new_val = round(volume.GetMasterVolumeLevelScalar() * 100)
+            else:
+                _wsh_keys(174, 5)
+                new_val = "?"
+            bot.reply_to(m, f"🔉 Giảm âm lượng → {new_val}%")
+        else:
+            try:
+                level = int(arg)
+                if not 0 <= level <= 100:
+                    raise ValueError
+                if USE_PYCAW:
+                    volume.SetMasterVolumeLevelScalar(level / 100.0, None)
+                    volume.SetMute(0, None)
+                else:
+                    # Use nircmd if available, else SendKeys workaround
+                    import shutil
+                    if shutil.which("nircmd"):
+                        import subprocess
+                        subprocess.run(["nircmd", "setsysvolume", str(int(level * 655.35))],
+                                       creationflags=subprocess.CREATE_NO_WINDOW, timeout=5, check=False)
+                    else:
+                        bot.reply_to(m,
+                            f"⚠️ pycaw chưa cài, không thể đặt âm lượng chính xác.\n"
+                            f"Cài: `pip install pycaw comtypes`", parse_mode="Markdown")
+                        return
+                bot.reply_to(m, f"🔊 Âm lượng đã đặt: **{level}%**", parse_mode="Markdown")
+            except ValueError:
+                bot.reply_to(m, "❌ Giá trị không hợp lệ. Dùng: /volume [0-100|up|down|max|mute|unmute|status]")
+        audit(f"/volume {arg}", m.from_user.id)
+        bot_stats.increment_command()
+    except Exception as e:
+        logger.error(f"h_volume failed: {e}")
+        bot.reply_to(m, f"❌ Lỗi: {e}")
+
 
 @bot.message_handler(commands=['cmdlist'])
 def cmd_list(m):
@@ -1553,6 +1700,35 @@ def cb_handler(c):
                         os.remove(log_path)
                 bot.answer_callback_query(c.id, "🗑 Đã xóa")
                 bot.send_message(cid, "🗑 Log keylogger đã được xóa.")
+            return
+
+        # Stop bot + watchdog
+        if data.startswith("stop|"):
+            action = data.split("|", 1)[1]
+            bot.answer_callback_query(c.id)
+            if action == "confirm":
+                bot.send_message(cid, "🛑 Bot đang tắt...")
+                audit("/stop confirmed", c.from_user.id)
+                # Kill watchdog (parent process) if running as frozen EXE
+                try:
+                    if getattr(sys, 'frozen', False):
+                        parent = psutil.Process(os.getpid()).parent()
+                        if parent:
+                            parent.terminate()
+                except Exception:
+                    pass
+                # Also kill by name fallback
+                try:
+                    for proc in psutil.process_iter(['name']):
+                        if proc.info.get('name', '').lower() in ('watchdog.exe',):
+                            proc.terminate()
+                except Exception:
+                    pass
+                import time as _t
+                _t.sleep(0.5)
+                os._exit(0)
+            else:
+                bot.send_message(cid, "❌ Đã hủy.")
             return
 
         # Power confirmation

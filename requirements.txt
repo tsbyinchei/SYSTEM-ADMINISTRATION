@@ -16,6 +16,8 @@ requests==2.31.0
 # ── Windows-specific ─────────────────────────────────────────
 pywin32==305
 WMI==1.5.1
+pycaw>=20181226
+comtypes>=1.1.14
 
 # ── Cryptography (browser credential decryption) ─────────────
 pycryptodomex==3.18.0
