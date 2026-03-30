@@ -251,7 +251,7 @@ $rootStore.Open("ReadWrite"); $rootStore.Add($cert); $rootStore.Close()
 
 # 2. Ký vào file EXE
 Set-AuthenticodeSignature -Certificate $cert -FilePath "dist\SystemCheck.exe"
-Set-AuthenticodeSignature -Certificate $cert -FilePath "watchdog.exe"
+Set-AuthenticodeSignature -Certificate $cert -FilePath "dist\watchdog.exe"
 
 # 3. Xuất file chứng chỉ (Để cài sang máy khác)
 Export-Certificate -Cert $cert -FilePath "dist\Cert.cer"
