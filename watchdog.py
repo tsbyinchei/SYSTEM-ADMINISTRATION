@@ -184,6 +184,13 @@ def run():
         uptime = time.time() - start_time
         reason = _read_exit_reason()
 
+        if reason == "manual_stop":
+            logger.info(
+                f"Main process exited by manual stop (code={ret}, uptime={uptime:.0f}s). "
+                "Watchdog will exit without restart."
+            )
+            break
+
         # Reset restart counter if it ran healthily for a while
         if uptime > RESTART_WINDOW:
             restart_count = 0
