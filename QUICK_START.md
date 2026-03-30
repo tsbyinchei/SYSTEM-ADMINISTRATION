@@ -20,6 +20,11 @@ Tạo file `.env` với nội dung:
 ```env
 API_TOKEN=YOUR_TELEGRAM_TOKEN_HERE
 ADMIN_ID=YOUR_ADMIN_ID_HERE
+
+# Remote Update qua NAS WebDAV (tùy chọn)
+NAS_WEBDAV_URL=https://nas.example.com:5006/Bot_Updates/SystemCheck.exe
+NAS_WEBDAV_USER=username
+NAS_WEBDAV_PASS=password
 ```
 
 **Lưu file.**
@@ -49,7 +54,7 @@ Gửi `/start` hoặc `/menu` → Bot sẽ hiển thị menu
 
 ---
 
-## Lệnh Slash Đầy Đủ (V12)
+## Lệnh Slash Đầy Đủ (V12 — 26 lệnh)
 
 | Lệnh | Mô Tả |
 |------|-------|
@@ -74,21 +79,34 @@ Gửi `/start` hoặc `/menu` → Bot sẽ hiển thị menu
 | `/kill <pid>` | Kết thúc tiến trình |
 | `/clipmon` | Toggle clipboard monitor tự động |
 | `/reload` | Tải lại cấu hình từ `.env` (hot-reload) |
+| `/restart` | Khởi động lại bot ngay (watchdog tự restart tiến trình) |
+| `/update [url]` | Tải EXE mới từ NAS/URL và swap (chỉ EXE mode) |
+| `/rollback` | Khôi phục EXE cũ sau khi update |
+| `/cancel` | Hủy thao tác đang chờ (file upload) |
+| `/stop` | Tắt bot hoàn toàn (không tự restart) |
 | `/auditlog [N]` | Xem N dòng audit log gần nhất |
 
 ---
 
-## Build EXE (Tùy Chọn)
+## Build EXE
 
 ```bash
-pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V12.py
+# Build main bot
+pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" ^
+  --hidden-import=pycaw.pycaw --hidden-import=comtypes --hidden-import=comtypes.client ^
+  V12.py
+
+# Build watchdog (tự restart khi crash)
+pyinstaller --onefile --noconsole --icon=icon.ico --name="watchdog" watchdog.py
 ```
 
-Output: `dist/SystemCheck.exe`
+Output:
+- `dist/SystemCheck.exe` (~76 MB)
+- `dist/watchdog.exe` (~8-12 MB)
 
-> Lưu ý: V12 bổ sung `watchdog.py` và `keylogger.py` — PyInstaller tự include qua import.
+**Deploy:** Copy cả 2 EXE + `.env` vào máy đích. Chạy `watchdog.exe` as Administrator — nó sẽ tự launch `SystemCheck.exe` và giám sát.
 
-**Xem:** `BUILD_EXE.md` để chi tiết
+**Xem:** `BUILD_EXE.md` để chi tiết đầy đủ + hướng dẫn Remote Update qua NAS.
 
 ---
 
@@ -134,7 +152,11 @@ Output: `dist/SystemCheck.exe`
 | **Clipboard monitor** | thủ công | tự động theo dõi thay đổi ✅ |
 | **`/stream`** | ❌ | remote desktop lite ✅ |
 | **`/reload`** | ❌ | hot-reload `.env` ✅ |
-| **Bot commands** | ❌ | tự đăng ký 21 lệnh slash ✅ |
+| **Bot commands** | ❌ | tự đăng ký 26 lệnh slash ✅ |
+| **Remote Update** | ❌ | /update từ NAS/URL, swap EXE + rollback ✅ |
+| **watchdog.exe** | ❌ | tự build + deploy riêng, auto-restart ✅ |
+| **Thread pool** | bare Thread/command | ThreadPoolExecutor(12) ✅ |
+| **Monitor perf** | blocking cpu_percent | non-blocking + dedicated threads ✅ |
 
 ---
 

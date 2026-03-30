@@ -74,6 +74,8 @@ packages = [
     "dotenv"
 ]
 
+missing_packages = []
+
 for pkg in packages:
     try:
         __import__(pkg if pkg != "dotenv" else "dotenv")
@@ -81,6 +83,11 @@ for pkg in packages:
     except ImportError:
         print(f"❌ {pkg} NOT INSTALLED")
         print(f"   → pip install {pkg}")
+        missing_packages.append(pkg)
+
+if missing_packages:
+    print(f"\n❌ Missing packages: {', '.join(missing_packages)}")
+    sys.exit(1)
 
 # Check 5: Load config
 print("\n[5/10] Checking config loading...")
@@ -138,6 +145,7 @@ except Exception as e:
 
 # Check 9: Test grabber
 print("\n[9/10] Testing grabber module...")
+browsers = []
 try:
     from config import BROWSER_PATHS
     from utils import get_installed_browsers

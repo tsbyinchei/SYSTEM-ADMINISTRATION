@@ -89,6 +89,16 @@ MAX_WORKERS = safe_int_env('MAX_WORKERS', 4)
 BLOCKED_FILE = os.path.join(BASE_DIR, os.getenv('BLOCKED_FILE', 'blocked.json'))
 SETTINGS_FILE = os.path.join(BASE_DIR, os.getenv('SETTINGS_FILE', 'settings.json'))
 
+# ==============================================================================
+# NAS / REMOTE UPDATE SETTINGS
+# ==============================================================================
+
+# WebDAV URL pointing to the EXE on your Synology NAS
+# Example: https://domain:port/homes/admin/builds/SystemCheck.exe
+NAS_WEBDAV_URL  = os.getenv('NAS_WEBDAV_URL',  '').strip()
+NAS_WEBDAV_USER = os.getenv('NAS_WEBDAV_USER', '').strip()
+NAS_WEBDAV_PASS = os.getenv('NAS_WEBDAV_PASS', '').strip()
+
 
 # ==============================================================================
 # PERFORMANCE SETTINGS

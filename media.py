@@ -14,6 +14,7 @@ import numpy as np
 import pyautogui
 import wave
 import pyaudio
+from monitor import cam_lock  # shared lock — prevents /cam racing intrusion thread
 
 logger = logging.getLogger(__name__)
 
@@ -46,34 +47,35 @@ def smart_screenshot():
 def capture_webcam():
     """Capture single frame from webcam"""
     cap = None
-    try:
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            logger.error("Webcam not available")
+    with cam_lock:  # prevent racing with intrusion detection thread
+        try:
+            cap = cv2.VideoCapture(0)
+            if not cap.isOpened():
+                logger.error("Webcam not available")
+                return None
+
+            ret, frame = cap.read()
+            if not ret:
+                logger.error("Failed to read webcam frame")
+                return None
+
+            success, encoded_img = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+            if success:
+                logger.info("Webcam frame captured")
+                return encoded_img.tobytes()
+            else:
+                logger.error("Webcam encoding failed")
+                return None
+
+        except Exception as e:
+            logger.error(f"capture_webcam failed: {e}")
             return None
-        
-        ret, frame = cap.read()
-        if not ret:
-            logger.error("Failed to read webcam frame")
-            return None
-        
-        success, encoded_img = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-        if success:
-            logger.info("Webcam frame captured")
-            return encoded_img.tobytes()
-        else:
-            logger.error("Webcam encoding failed")
-            return None
-    
-    except Exception as e:
-        logger.error(f"capture_webcam failed: {e}")
-        return None
-    finally:
-        if cap is not None:
-            try:
-                cap.release()
-            except:
-                pass
+        finally:
+            if cap is not None:
+                try:
+                    cap.release()
+                except:
+                    pass
 
 # ==============================================================================
 # AUDIO RECORDING
@@ -82,8 +84,6 @@ def capture_webcam():
 def record_audio(seconds=10, filename="rec.wav"):
     """Record audio from microphone — duration now configurable"""
     try:
-        import pyaudio
-
         logger.info(f"Recording audio for {seconds} seconds...")
 
         p = pyaudio.PyAudio()

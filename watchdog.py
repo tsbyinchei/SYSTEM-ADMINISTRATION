@@ -33,6 +33,7 @@ RESTART_DELAY = 3        # seconds to wait before restarting
 MAX_RESTARTS = 20        # guard against infinite crash loop
 RESTART_WINDOW = 120     # seconds — reset counter after this much uptime
 LOG_FILE = os.path.join(BASE_DIR, "watchdog.log")
+EXIT_REASON_FILE = os.path.join(BASE_DIR, '.exit_reason')  # Exit reason marker
 
 # ------------------------------------------------------------------
 # Logging
@@ -141,6 +142,25 @@ def register_watchdog_autostart():
         logger.warning(f"register_watchdog_autostart failed: {e}")
 
 
+def _read_exit_reason():
+    """Read and clear exit reason marker written by main process."""
+    try:
+        import json
+        if not os.path.exists(EXIT_REASON_FILE):
+            return "unknown"
+        with open(EXIT_REASON_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        try:
+            os.remove(EXIT_REASON_FILE)
+        except Exception:
+            pass
+        reason = str(data.get("reason", "unknown"))
+        return reason or "unknown"
+    except Exception as e:
+        logger.warning(f"Failed to read exit reason: {e}")
+        return "unknown"
+
+
 # ------------------------------------------------------------------
 # Main watchdog loop
 # ------------------------------------------------------------------
@@ -162,6 +182,7 @@ def run():
     while True:
         ret = proc.wait()   # blocks until process exits
         uptime = time.time() - start_time
+        reason = _read_exit_reason()
 
         # Reset restart counter if it ran healthily for a while
         if uptime > RESTART_WINDOW:
@@ -169,7 +190,7 @@ def run():
 
         restart_count += 1
         logger.warning(
-            f"Main process exited (code={ret}, uptime={uptime:.0f}s). "
+            f"Main process exited (code={ret}, reason={reason}, uptime={uptime:.0f}s). "
             f"Restart #{restart_count}/{MAX_RESTARTS}"
         )
 
