@@ -28,12 +28,20 @@ load_dotenv(dotenv_path=env_path)
 
 LOG_FILE = os.path.join(BASE_DIR, os.getenv('LOG_FILE', 'bot.log'))
 
+# Avoid UnicodeEncodeError on Windows consoles using legacy code pages (cp1252/cp850)
+# when log messages contain Unicode characters (e.g., emoji).
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
     ]
 )
 
@@ -88,6 +96,16 @@ MAX_WORKERS = safe_int_env('MAX_WORKERS', 4)
 
 BLOCKED_FILE = os.path.join(BASE_DIR, os.getenv('BLOCKED_FILE', 'blocked.json'))
 SETTINGS_FILE = os.path.join(BASE_DIR, os.getenv('SETTINGS_FILE', 'settings.json'))
+
+# ==============================================================================
+# NAS / REMOTE UPDATE SETTINGS
+# ==============================================================================
+
+# WebDAV URL pointing to the EXE on your Synology NAS
+# Example: https://domain:port/homes/admin/builds/SystemCheck.exe
+NAS_WEBDAV_URL  = os.getenv('NAS_WEBDAV_URL',  '').strip()
+NAS_WEBDAV_USER = os.getenv('NAS_WEBDAV_USER', '').strip()
+NAS_WEBDAV_PASS = os.getenv('NAS_WEBDAV_PASS', '').strip()
 
 
 # ==============================================================================

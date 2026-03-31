@@ -8,18 +8,22 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     V12.py (Main Entry)                     │
-│                  (Version 12.0, ~1350+ lines)               │
-│  Xử lý tất cả handlers & callbacks từ Telegram Bot          │
-└──────────────┬────────────────────────────────────────────────┘
+│                  (Version 12.0, ~2000+ lines)               │
+│  Bot handlers, ThreadPoolExecutor(12), remote update        │
+└──────────────┬──────────────────────────────────────────────┘
                │
-       ┌───────┼───────┬───────────┬──────────┬─────────┬────────┬────────┐
-       │       │       │           │          │        │        │
-       ▼       ▼       ▼           ▼          ▼        ▼        ▼
-   config   utils  grabber      media     monitor  keylogger  watchdog
-   Setup  Helpers Password   Screenshot  Monitor  Keystroke  Auto-
-   Logging Audit  History    Webcam      Stats    ParentCtrl restart
+       ┌───────┴───────┬───────────┬──────────┬───────┬────────┐
+       │               │           │          │       │        │
+       ▼       ▼       ▼           ▼          ▼       ▼        ▼
+   config   utils  grabber      media     monitor  keylogger
+   Setup  Helpers Password   Screenshot  Monitor  Keystroke
+   Logging Audit  History    Webcam      Stats    ParentCtrl
    .env    Persist WiFi      Audio/MP4  Clipboard
-   Tokens  Settings         Stream     Monitor
+   NAS     Settings         Stream     Monitor
+   Tokens
+
+   watchdog.py ── build riêng thành watchdog.exe
+   (giám sát + restart SystemCheck.exe khi crash)
 ```
 
 ---
@@ -56,11 +60,14 @@
                  ▼
 ┌─────────────────────────────────────────────────────────┐
 │ 3. V12.py INITIALIZES GLOBALS                           │
-│    ├─ bot = TeleBot(API_TOKEN)                          │
+│    ├─ bot = TeleBot(API_TOKEN, num_threads=8)           │
+│    ├─ _executor = ThreadPoolExecutor(max_workers=12)    │
 │    ├─ bot_stats = BotStats()                            │
 │    ├─ BLOCKED_DATA = load_blocked_list()                │
 │    ├─ CURRENT_SETTINGS = load_settings()                │
 │    └─ State: intrusion_alert, block_mode, taskmgr       │
+│       upload_state/_pending_update (lock-safe),         │
+│       _EXIT_REASON_FILE, _UPDATE_BACKUP_FILE            │
 └────────────────┬────────────────────────────────────────┘
                  │
                  ▼
@@ -88,37 +95,27 @@
 
 ```
 ┌────────────────────────────────────────┐
-│  Telegram → /start or /menu            │
+│  Telegram → /status (lệnh nặng)        │
 └─────────────┬──────────────────────────┘
               │
               ▼
-┌────────────────────────────────────────┐
-│ Bot receives message                   │
-│ Matches handler: @bot.message_handler  │
-└─────────────┬──────────────────────────┘
+┌────────────────────────────────────────────┐
+│ check_status(m) — handler thread (Bot)     │
+│ ├─ Auth check: m.from_user.id == ADMIN_ID  │
+│ └─ _executor.submit(task)  ← không block   │
+└─────────────┬──────────────────────────────┘
               │
               ▼
-┌────────────────────────────────────────┐
-│ menu_handler(m) triggered              │
-│ ├─ Check: m.from_user.id == ADMIN_ID   │
-│ ├─ Parse args: ['/menu', '1']          │
-│ └─ send_reply_menu(m)                  │
-└─────────────┬──────────────────────────┘
-              │
-              ▼
-┌────────────────────────────────────────┐
-│ send_reply_menu() creates keyboard     │
-│ ├─ ReplyKeyboardMarkup(row_width=2)    │
-│ ├─ Add buttons: 🔑 🌐 🖼 📸...        │
-│ └─ bot.send_message(m.chat.id, ...)    │
-└─────────────┬──────────────────────────┘
-              │
-              ▼
-┌────────────────────────────────────────┐
-│ Message sent back to Telegram          │
-│ User sees keyboard menu                │
-└────────────────────────────────────────┘
+┌────────────────────────────────────────────┐
+│ ThreadPoolExecutor(max_workers=12)         │
+│ Worker thread picks up task()              │
+│ ├─ Collect CPU/RAM/disk/battery/net        │
+│ ├─ Format message                          │
+│ └─ bot.send_message()                      │
+└────────────────────────────────────────────┘
 ```
+
+**Tất cả lệnh nặng** (/status, /net, /ps, webcam, passwords...) đều được submit vào `_executor` thay vì spawn thread mới mỗi lần.
 
 ---
 
@@ -135,13 +132,13 @@
 ┌────────────────────────────────────────────────────┐
 │ h_pass(m) handler triggered                        │
 │ ├─ Check admin ID                                  │
-│ └─ threading.Thread(target=task, daemon=True)      │
+│ └─ _executor.submit(task)  ← không block polling   │
 └─────────────┬──────────────────────────────────────┘
               │
               ▼
 ┌────────────────────────────────────────────────────┐
 │ Background Task Starts (không block UI)            │
-│ ├─ bot.send_message("⏳ Đang trích xuất...")      │
+│ ├─ bot.send_message("⏳ Đang trích xuất...")       │
 │ └─ outfile = grab_passwords()                      │
 └─────────────┬──────────────────────────────────────┘
               │
@@ -206,9 +203,9 @@
         │           └─ Nếu CPU > threshold:
         │              Send alert (với debounce 5 min)
         │
-        ├─ Check 5: _check_intrusion_alert()
+        ├─ Check 5: _intrusion_loop()  ← DEDICATED THREAD (không chạy trong main loop)
         │           └─ Nếu intrusion_alert_active:
-        │              ├─ Capture 2 frames từ webcam
+        │              ├─ Capture 2 frames từ webcam (thread owns self.cap)
         │              ├─ Detect motion (absdiff)
         │              └─ Send photo nếu motion > threshold
         │
@@ -217,8 +214,14 @@
                        ├─ Poll clipboard text
                        └─ Send alert nếu nội dung thay đổi
                │
-        time.sleep(1)  ← Chờ 1 giây rồi lặp lại
+        stop_event.wait(MONITOR_INTERVAL)  ← không dùng time.sleep, dừng ngay khi stop()
 ```
+
+**Tối ưu monitor.py:**
+- `cpu_percent(interval=0)` — non-blocking (không block 500ms mỗi tick)
+- `_intrusion_loop` chạy trong dedicated daemon thread — webcam không block main loop
+- `_check_processes()` single-pass — gộp cả blocked apps + taskmgr vào 1 lần `process_iter()`
+- `_get_blocked_cached()` — chỉ đọc `blocked.json` khi mtime file thay đổi
 
 **Ví dụ: CPU Alert**
 
@@ -237,7 +240,55 @@ def _check_cpu_alert(self):
 
 ---
 
-## **VI. DATA FLOW - PASSWORD EXTRACTION DETAIL**
+## **VI. REMOTE UPDATE FLOW (/update)**
+
+```
+User: /update  (không URL → dùng NAS WebDAV từ .env)
+User: /update https://...  (URL trực tiếp)
+       │
+       ▼
+ cmd_update(m) → _executor.submit(download_task)
+       │
+       ▼
+ download_task():
+  ├─ requests.get(url, auth=(user,pass), stream=True)
+  ├─ Progress: edit message mỗi 4 giây (xx MB / yy MB)
+  ├─ Validate: file[:2] == b'MZ' + size > 5MB
+  └─ Lưu vào _SystemCheck_new.exe
+       │
+       ▼
+  Bot gửi: [✅ Apply & Restart] [❌ Hủy]
+       │
+       ▼ (user xác nhận)
+ cb_handler: update|apply → _executor.submit(do_swap)
+       │
+       ▼
+ do_swap():
+  ├─ shutil.copy2(exe → exe_backup_YYYYMMDD.exe)
+  ├─ Lưu .update_backup JSON (backup path + exe path)
+  ├─ Viết _update_swap.bat:
+  │     timeout 3
+  │     move /y _SystemCheck_new.exe SystemCheck.exe
+  │     start SystemCheck.exe
+  │     del %~f0
+  ├─ Popen(bat, DETACHED_PROCESS)
+  └─ os._exit(0)  ← giải phóng lock EXE
+       │
+       ▼ (3 giây sau)
+ bat: move new → old path → start SystemCheck.exe
+
+Rollback:
+  /rollback → đọc .update_backup → xác nhận
+  do_rollback() → swap ngược + os._exit(0)
+```
+
+**Lý do PyInstaller `--onefile` không lock EXE gốc:**
+Khi chạy, EXE tự extract ra `%TEMP%\_MEIxxxxxx\` rồi chạy từ đó.
+EXE gốc trên disk được giải phóng ngay sau khi process thoát → bat file có thể `move /y` sauđó.
+
+---
+
+## **VI-OLD → VII. DATA FLOW - PASSWORD EXTRACTION DETAIL**
 
 ```
 extracting passwords:
@@ -361,25 +412,28 @@ settings.json (Menu state)
 
 ### **Main Thread:**
 ```
-infinity_polling(skip_pending=True) ← Chờ messages từ Telegram (tự phục hồi)
+bot.infinity_polling(timeout=10, skip_pending=True,
+    allowed_updates=['message','callback_query'])  ← tự phục hồi
 ```
 
 ### **Monitor Thread (Background):**
 ```
-monitor.run() ← Check CPU, camera, apps (name+cmdline), firewall refresh
+monitor.run()  ← loop: check CPU, self-defense, process block, clipboard
+_intrusion_loop()  ← dedicated thread: webcam motion detection (owns self.cap)
 ```
 
-### **Task Threads (On-demand):**
+### **Task Thread Pool (ThreadPoolExecutor):**
 ```
-h_pass() → threading.Thread(target=task)
-├─ Grab passwords (không block main)
-└─ Send to Telegram when done
+_executor = ThreadPoolExecutor(max_workers=12, thread_name_prefix="botworker")
+
+# Tất cả lệnh nặng dùng executor:
+_executor.submit(task)   ← /status, /net, /ps, passwords, webcam, stream, /update...
 ```
 
 **Model:** Producer-Consumer
-- Main: Receives commands
-- Monitor: Runs checks
-- Tasks: Execute commands
+- Main (Bot polling): Nhận commands, auth check, submit vào pool
+- Monitor: Chạy checks độc lập
+- Pool workers (12): Thực thi lệnh, không block polling
 
 ---
 
@@ -387,15 +441,26 @@ h_pass() → threading.Thread(target=task)
 
 ```
 config.py
-├─ Load .env
+├─ Load .env (API_TOKEN, ADMIN_ID, NAS_WEBDAV_*)
 ├─ Setup logging
-└─ Define constants
+└─ Define constants + NAS WebDAV vars
 
 utils.py
 ├─ Window operations
 ├─ File management
 ├─ System protection
-└─ JSON operations
+└─ JSON operations, audit log, settings persist
+
+watchdog.py (build riêng thành watchdog.exe)
+├─ Launch SystemCheck.exe
+├─ Monitor process (loop: poll exit code)
+├─ Restart nếu crash (MAX_RESTARTS=20, RESTART_WINDOW=120s)
+└─ Register Task Scheduler AtLogon entry
+
+keylogger.py
+├─ pynput listener (window-aware)
+├─ _auto_sender_loop: Event.wait(300) ← dừng ngay khi stop()
+└─ Tự gửi buffer qua Telegram mỗi 5 phút
 
 grabber.py
 ├─ Extract passwords (CONCURRENT!)
@@ -444,10 +509,11 @@ USER ACTION           →  HANDLER              →  MODULE
 /block app a b c     →  block_mgr()          →  save blocked_data + firewall/hosts
 /block site x y      →  block_mgr()          →  save blocked_data + firewall/hosts
 /cmd ls              →  run_shell()          →  subprocess.run()
+/update [url]        →  cmd_update()         →  requests.get(NAS) + swap bat
+/rollback            →  cmd_rollback()        →  read .update_backup + swap bat
+/stop                →  h_stop() + callback  →  os._exit(0)
 ```
 
 ---
 
 **✅ Now you understand the complete architecture!**
-
-Save as: ARCHITECTURE.md

